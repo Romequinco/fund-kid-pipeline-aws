@@ -47,7 +47,19 @@ un correlativo. El estado es `ABIERTA` o `CERRADA`. Las decisiones se añaden al
 - **Decisión:** respetar `robots.txt`, identificarse con un `User-Agent` propio, hacer una pausa entre peticiones y
   descargar solo los PDF públicos del KID. Para cada documento se guarda su origen (URL de la ficha y del PDF) y cuándo
   se descargó (exigido por el enunciado, §4).
+- **Detalle:** `urllib.robotparser` no entiende comodines, así que `SesionEducada` comprueba aparte los `Disallow` con
+  `*` o `$` (RFC 9309).
 - **Estado:** CERRADA
+
+### D-1.3 · Bestinver prohíbe los PDF en su robots.txt
+
+- **Fecha:** 2026-11-19
+- **Contexto:** el robots.txt de Bestinver tiene `Disallow: /*.pdf$` para todos los agentes (comprobado el 19/11/2026).
+  Con la regla de D-1.1, el scraper se negará a descargar sus KID. Además, Azvalor respondió HTTP 418 a la petición
+  automática, y sus fichas cuelgan hoy de `/fondos-de-inversion/`, no de `/fondos/` como dice el enunciado.
+- **Alternativas:** usar Cobas y Azvalor como las dos fuentes mínimas; preguntar en el Taller 1 cómo lo trata la
+  solución de referencia; o buscar los mismos KID en otra fuente pública (CNMV, plataformas de distribución).
+- **Estado:** ABIERTA (se lleva al Taller 1)
 
 ### D-1.2 · Identidad del documento e idempotencia
 
@@ -64,9 +76,16 @@ un correlativo. El estado es `ABIERTA` o `CERRADA`. Las decisiones se añaden al
 - **Fecha:** 2026-11-19
 - **Contexto:** el enunciado exige salidas estructuradas (esquema JSON o herramientas en modo estricto), no pedir "JSON"
   y parsear el texto.
-- **Alternativas:** formato de respuesta con esquema JSON en la Converse API, o una herramienta con `inputSchema` y
-  `toolChoice` forzado. El esquema sale en los dos casos de un único modelo Pydantic (`schema.py`).
-- **Estado:** ABIERTA (se cierra en el Taller 2 con la solución de referencia)
+- **Alternativas** (confirmadas en la documentación de la Converse API, ver
+  [06_piezas_de_la_practica.md](teoria/06_piezas_de_la_practica.md) §4):
+  - Formato de respuesta: `outputConfig.textFormat` con `type: json_schema` y el esquema como cadena.
+  - Herramienta en modo estricto: `toolSpec.strict: true` con `inputSchema.json`, y `toolChoice: {tool: {name}}`
+    para forzar su uso.
+- **Decisión provisional (2026-11-19):** herramienta estricta (`extract.py`). El esquema sale de `schema.Kid` pero se
+  adapta al modo estricto (`additionalProperties: false`, sin `minimum`/`maximum`); los rangos los valida Pydantic al
+  leer la respuesta.
+- **Por verificar en el Taller 2:** que `toolChoice.tool` funcione con el modelo elegido y la versión mínima de boto3.
+- **Estado:** ABIERTA (se cierra con la solución de referencia del Taller 2)
 
 ### D-2.2 · Modelo de Bedrock
 
@@ -83,6 +102,8 @@ un correlativo. El estado es `ABIERTA` o `CERRADA`. Las decisiones se añaden al
 - **Contexto:** la referencia es Aurora PostgreSQL Serverless v2 con RDS Data API: no hace falta VPC ni driver desde
   Lambda, y escala a cero si se pausa.
 - **Alternativas:** RDS PostgreSQL clásico con conexión por VPC.
+- **Por verificar:** que la Data API acepte el secreto que gestiona RDS (`manage_master_user_password`, nombre
+  `rds!cluster-...`). Los ejemplos de AWS usan un secreto propio; si falla, se crea el secreto en Terraform.
 - **Estado:** ABIERTA (pendiente de ver el coste real con los créditos de la cuenta)
 
 ---

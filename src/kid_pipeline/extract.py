@@ -1,8 +1,8 @@
 """Extracción con Amazon Bedrock (Converse API) y salida estructurada.
 
-El PDF entra como bloque `document` y la respuesta se fuerza con una herramienta cuyo `inputSchema` es el
-esquema del KID (`toolChoice` obliga a usarla): el modelo no escribe texto libre que haya que parsear.
-La alternativa (formato de respuesta con esquema JSON) está abierta en D-2.1.
+El PDF entra como bloque `document` y la respuesta se fuerza con una herramienta en modo estricto
+(`strict: true`) cuyo `inputSchema` es el esquema del KID, y `toolChoice` obliga a usarla: el modelo no escribe
+texto libre que haya que parsear. La alternativa documentada es `outputConfig.textFormat` con `json_schema` (D-2.1).
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ def peticion(pdf: bytes, modelo: str) -> dict:
                 "name": HERRAMIENTA,
                 "description": "Registra los datos extraídos del KID.",
                 "inputSchema": {"json": esquema_json()},
+                "strict": True,
             }}],
             "toolChoice": {"tool": {"name": HERRAMIENTA}},
         },

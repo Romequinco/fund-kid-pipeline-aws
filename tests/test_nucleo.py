@@ -5,7 +5,7 @@ from datetime import UTC, date, datetime
 import pytest
 from pydantic import ValidationError
 
-from kid_pipeline.capture.base import Documento, KidEnlace
+from kid_pipeline.capture.base import Documento, KidEnlace, prohibidos_con_comodin
 from kid_pipeline.db import UPSERT_KID, BaseDatos, parametro
 from kid_pipeline.extract import HERRAMIENTA, leer_respuesta, peticion
 from kid_pipeline.schema import Kid, esquema_json, faltan_obligatorios, isin_valido
@@ -46,6 +46,14 @@ def test_esquema_tiene_los_campos_del_anexo_a():
             "costes_salida_pct"} <= campos
 
 
+def test_robots_con_comodines():
+    robots = "User-agent: *\nDisallow: /*.pdf$\nDisallow: /privado/\n\nUser-agent: otro\nDisallow: /*"
+    patrones = prohibidos_con_comodin(robots)
+    assert len(patrones) == 1
+    assert patrones[0].match("/media/kid-fondo.pdf")
+    assert not patrones[0].match("/fondos-de-inversion/fondo/")
+
+
 def test_clave_s3_depende_solo_del_contenido():
     otro = Documento(KidEnlace("cobas", "https://otra.url/kid.pdf", "x"), DOC.contenido, datetime.now(UTC))
     assert clave_pdf(DOC) == clave_pdf(otro) == f"kid/cobas/{DOC.sha256}.pdf"
@@ -53,9 +61,18 @@ def test_clave_s3_depende_solo_del_contenido():
     assert clave_manifiesto(DOC.descargado_en) == "manifest/20261119T100000Z.jsonl"
 
 
+def test_esquema_cumple_el_modo_estricto():
+    esquema = esquema_json()
+    texto = str(esquema)
+    assert esquema["additionalProperties"] is False
+    assert not any(k in texto for k in ("'minimum'", "'maximum'", "'default'"))
+    assert set(esquema["required"]) == set(esquema["properties"])
+
+
 def test_peticion_bedrock_fuerza_la_herramienta():
     p = peticion(b"%PDF", "modelo")
     assert p["toolConfig"]["toolChoice"] == {"tool": {"name": HERRAMIENTA}}
+    assert p["toolConfig"]["tools"][0]["toolSpec"]["strict"] is True
     assert p["messages"][0]["content"][0]["document"]["format"] == "pdf"
 
 

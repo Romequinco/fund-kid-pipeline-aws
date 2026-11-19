@@ -146,14 +146,26 @@ de clase no se versiona: quien lo necesite lo copia en `docs/raw/`.
 ## Documentación
 
 - [`docs/DECISIONES.md`](docs/DECISIONES.md): decisiones del proyecto, cerradas y abiertas.
-- [`docs/teoria/`](docs/teoria/): síntesis del material de clase, con la fuente citada en cada concepto.
+- [`docs/teoria/`](docs/teoria/): síntesis del material de clase, con la fuente citada en cada concepto. Se empieza
+  por [`practica_partida.md`](docs/teoria/practica_partida.md) (enunciado, entrega y lo que dijo el profesor).
+
+| Documento | Contenido |
+|---|---|
+| [`00_fundamentos_aws.md`](docs/teoria/00_fundamentos_aws.md) | Regiones, modelos de servicio, cuenta y costes, IAM, CLI, boto3 y VPC |
+| [`01_ec2_y_desarrollo_remoto.md`](docs/teoria/01_ec2_y_desarrollo_remoto.md) | EC2, SSH y SCP, VS Code remoto, cron, variables de entorno y FastAPI en EC2 |
+| [`02_s3_y_streamlit.md`](docs/teoria/02_s3_y_streamlit.md) | S3 y aplicaciones de datos con Streamlit |
+| [`03_lambda_y_contenedores.md`](docs/teoria/03_lambda_y_contenedores.md) | Lambda, disparadores, Docker, ECR y ECS Express Mode |
+| [`04_devops_y_terraform.md`](docs/teoria/04_devops_y_terraform.md) | Tests, GitHub Actions, despliegue con OIDC y Terraform |
+| [`05_datos_y_documentos.md`](docs/teoria/05_datos_y_documentos.md) | DynamoDB, Athena, Textract y el proyecto final del curso |
+| [`06_piezas_de_la_practica.md`](docs/teoria/06_piezas_de_la_practica.md) | Lo que el curso no cubre: KID y PRIIPs, scraping, Bedrock y Aurora con Data API |
+| [`07_glosario.md`](docs/teoria/07_glosario.md) · [`COBERTURA.md`](docs/teoria/COBERTURA.md) | Términos, y qué tramo de cada fuente está en qué documento |
 
 ## Estado
 
 - [x] Repositorio y material de clase (local, en `docs/raw/`, no versionado)
 - [x] Mini base: carpetas por fase y decisiones iniciales
 - [x] Estructura completa: paquete común, API, cuadro de mando, Terraform, workflows y tests
-- [ ] Documentación de teoría (`docs/teoria/`)
+- [x] Documentación de teoría (`docs/teoria/`), hasta la clase del 14/11 y la web del curso
 - [ ] Taller 1: captura, manifiesto, conexión GitHub-AWS, bucket y base de datos con Terraform
 - [ ] Taller 2: extracción con Bedrock, carga en PostgreSQL, API y aplicación desplegadas
 - [ ] Taller 3: exposición

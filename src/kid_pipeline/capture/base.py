@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
@@ -41,6 +42,24 @@ class Documento:
         return hashlib.sha256(self.contenido).hexdigest()
 
 
+def prohibidos_con_comodin(robots_txt: str) -> list[re.Pattern]:
+    """`Disallow` con `*` o `$` del grupo `User-agent: *` (RFC 9309).
+
+    `urllib.robotparser` no entiende comodines: con `Disallow: /*.pdf$` daría un PDF por permitido.
+    """
+    patrones, en_grupo = [], False
+    for linea in robots_txt.splitlines():
+        clave, _, valor = linea.split("#", 1)[0].partition(":")
+        clave, valor = clave.strip().lower(), valor.strip()
+        if clave == "user-agent":
+            en_grupo = valor == "*"
+        elif clave == "disallow" and en_grupo and valor and ("*" in valor or valor.endswith("$")):
+            fin = valor.endswith("$")
+            cuerpo = re.escape(valor.rstrip("$")).replace(r"\*", ".*")
+            patrones.append(re.compile(cuerpo + ("$" if fin else "")))
+    return patrones
+
+
 class SesionEducada:
     """requests.Session con User-Agent propio, robots.txt y pausa mínima entre peticiones."""
 
@@ -48,7 +67,7 @@ class SesionEducada:
         self.http = requests.Session()
         self.http.headers["User-Agent"] = USER_AGENT
         self.pausa_s, self.timeout_s = pausa_s, timeout_s
-        self._robots: dict[str, robotparser.RobotFileParser] = {}
+        self._robots: dict[str, tuple[robotparser.RobotFileParser, list[re.Pattern]]] = {}
         self._ultima = 0.0
 
     def permitido(self, url: str) -> bool:
@@ -56,11 +75,16 @@ class SesionEducada:
         if base not in self._robots:
             rp = robotparser.RobotFileParser(urljoin(base, "/robots.txt"))
             try:
-                rp.read()
-            except OSError:
-                rp.allow_all = True  # sin robots.txt accesible se asume permitido
-            self._robots[base] = rp
-        return self._robots[base].can_fetch(USER_AGENT, url)
+                r = self.http.get(rp.url, timeout=self.timeout_s)
+                texto = r.text if r.ok else ""
+            except requests.RequestException:
+                texto = ""  # sin robots.txt accesible se asume permitido
+            rp.parse(texto.splitlines())
+            self._robots[base] = (rp, prohibidos_con_comodin(texto))
+        rp, patrones = self._robots[base]
+        u = urlparse(url)
+        ruta = u.path + (f"?{u.query}" if u.query else "")
+        return rp.can_fetch(USER_AGENT, url) and not any(p.match(ruta) or p.match(u.path) for p in patrones)
 
     def get(self, url: str) -> requests.Response:
         if not self.permitido(url):

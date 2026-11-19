@@ -12,7 +12,10 @@ from .base import Fuente, KidEnlace, SesionEducada
 
 
 class Bestinver(Fuente):
-    """Dificultad baja: cada ficha /fondos-de-inversion/<fondo>/ enlaza «Datos fundamentales». Una clase por ficha."""
+    """Dificultad baja: cada ficha /fondos-de-inversion/<fondo>/ enlaza «Datos fundamentales». Una clase por ficha.
+
+    Su robots.txt prohíbe los PDF (`Disallow: /*.pdf$`): SesionEducada lo respetará (D-1.3).
+    """
 
     nombre = "bestinver"
     inicio = "https://www.bestinver.es/fondos-de-inversion/"
@@ -22,10 +25,13 @@ class Bestinver(Fuente):
 
 
 class Azvalor(Fuente):
-    """Dificultad media: ficha con «Folleto simplificado (DFP)». El nombre del PDF lleva la fecha: leerlo del HTML."""
+    """Dificultad media: ficha con «Folleto simplificado (DFP)». El nombre del PDF lleva la fecha: leerlo del HTML.
+
+    El 19/11/2026 las fichas colgaban de /fondos-de-inversion/, no de /fondos/ como dice el enunciado (D-1.3).
+    """
 
     nombre = "azvalor"
-    inicio = "https://www.azvalor.com/fondos/"
+    inicio = "https://www.azvalor.com/fondos-de-inversion/"
 
     def enlaces(self, sesion: SesionEducada) -> Iterator[KidEnlace]:
         raise NotImplementedError("Taller 1")

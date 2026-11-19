@@ -53,9 +53,31 @@ class Kid(BaseModel):
         return v
 
 
+_NO_ADMITIDAS_EN_ESTRICTO = {"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "minLength", "maxLength",
+                             "default", "title"}
+
+
+def _limpiar(nodo):
+    if isinstance(nodo, dict):
+        limpio = {k: _limpiar(v) for k, v in nodo.items() if k not in _NO_ADMITIDAS_EN_ESTRICTO}
+        if limpio.get("type") == "object":
+            limpio["additionalProperties"] = False
+        return limpio
+    if isinstance(nodo, list):
+        return [_limpiar(v) for v in nodo]
+    return nodo
+
+
 def esquema_json() -> dict:
-    """Esquema JSON que se pasa a Bedrock (ver extract.py y D-2.1)."""
-    return Kid.model_json_schema()
+    """Esquema para las salidas estructuradas de Bedrock (D-2.1).
+
+    El modo estricto exige `additionalProperties: false` en cada objeto y no admite `minimum`, `maximum` ni
+    longitudes, así que se quitan aquí y los rangos (SRI 1-7, porcentajes >= 0) los valida Pydantic después.
+    Todos los campos van en `required` aunque admitan null: el modelo tiene que pronunciarse sobre cada uno.
+    """
+    esquema = _limpiar(Kid.model_json_schema())
+    esquema["required"] = list(esquema["properties"])
+    return esquema
 
 
 def faltan_obligatorios(kid: Kid) -> list[str]:
