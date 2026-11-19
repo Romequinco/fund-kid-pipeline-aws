@@ -65,10 +65,34 @@ taller 3 con demo en directo.
 | Visualización | Streamlit en ECS Express Mode | Dash, React |
 | Despliegue | Terraform + GitHub Actions (OIDC, estado en S3) | Libre |
 
+## Estructura
+
+Una carpeta por fase del pipeline. La lógica vive en un único paquete y el resto son capas finas que la ejecutan o la
+sirven ([D-0.3](docs/DECISIONES.md)).
+
+```
+├── src/kid_pipeline/     # lógica común: captura, S3, extracción con Bedrock y carga en PostgreSQL
+│   └── capture/          # un scraper por gestora y el manifiesto de descargas
+├── scripts/              # ejecución por lotes de cada fase
+├── db/                   # esquema SQL
+├── api/                  # FastAPI en Lambda con Function URL
+├── dashboard/            # Streamlit en ECS Express Mode
+├── infra/
+│   ├── bootstrap/        # una vez y en local: estado de Terraform, OIDC y rol de GitHub
+│   └── main/             # el resto de la infraestructura, aplicada desde GitHub Actions
+├── tests/
+├── .github/workflows/    # CI y despliegue
+└── docs/
+    ├── DECISIONES.md     # registro de decisiones D-X.n
+    ├── teoria/           # síntesis del material de clase
+    └── raw/              # material de clase (local, no versionado)
+```
+
 ## Estado
 
 - [x] Repositorio y material de clase (local, en `docs/raw/`, no versionado)
-- [ ] Estructura del repositorio
+- [x] Mini base: carpetas por fase y decisiones iniciales
+- [ ] Estructura del repositorio completa
 - [ ] Documentación de teoría (`docs/teoria/`)
 - [ ] Taller 1: captura, manifiesto, conexión GitHub-AWS, bucket y base de datos con Terraform
 - [ ] Taller 2: extracción con Bedrock, carga en PostgreSQL, API y aplicación desplegadas
