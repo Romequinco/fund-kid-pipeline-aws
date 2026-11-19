@@ -94,6 +94,16 @@ un correlativo. El estado es `ABIERTA` o `CERRADA`. Las decisiones se añaden al
   se exponen por la API y la aplicación) y deja una única puerta de acceso a los datos.
 - **Estado:** CERRADA
 
+### D-4.2 · FastAPI en Lambda con Mangum e imagen de contenedor
+
+- **Fecha:** 2026-11-19
+- **Decisión:** la API se empaqueta como imagen (`public.ecr.aws/lambda/python:3.13`), como en las lecciones 18 y 22
+  del curso, y Mangum traduce el evento de la Function URL a ASGI. La imagen evita el problema de compilar dependencias
+  para Linux desde Windows (lección 13).
+- **Alternativa descartada por ahora:** AWS Lambda Web Adapter, que ejecuta uvicorn sin tocar el código pero añade una
+  capa más que explicar.
+- **Estado:** CERRADA (se revisa si el Taller 2 usa otra opción)
+
 ---
 
 ### D-5.1 · Terraform en dos raíces
@@ -110,5 +120,24 @@ un correlativo. El estado es `ABIERTA` o `CERRADA`. Las decisiones se añaden al
 - **Contexto:** ECS Express cuesta del orden de 2-3 $ al día (curso, lección 17), y Aurora cobra por capacidad mientras
   no se pausa.
 - **Alternativas:** desplegar solo para las pruebas y la exposición, y apagarlo con `terraform destroy` el resto del
-  tiempo, o mover la aplicación a una opción sin coste fijo.
+  tiempo, o mover la aplicación a una opción sin coste fijo. La variable `desplegar_dashboard` permite apagar solo el
+  cuadro de mando, y Aurora se pausa sola a los 10 minutos sin uso (`min_capacity = 0`).
 - **Estado:** ABIERTA
+
+### D-5.3 · Permisos del rol de GitHub
+
+- **Fecha:** 2026-11-19
+- **Decisión provisional:** `PowerUserAccess` + `IAMFullAccess`, porque `infra/main` crea roles y Terraform necesita
+  gestionarlos. La confianza ya está limitada a este repositorio (`repo:Romequinco/fund-kid-pipeline-aws:*`).
+- **Pendiente:** el curso pide, "para nota", limitar los permisos a los recursos propios (lección 28). Opción: una
+  política propia por prefijo `fund-kid-*` y restringir la condición a la rama `main`.
+- **Estado:** ABIERTA
+
+### D-5.4 · Terraform como único dueño del despliegue
+
+- **Fecha:** 2026-11-19
+- **Decisión:** las imágenes se etiquetan con el SHA del commit y esa etiqueta entra en Terraform
+  (`api_image_tag`, `dashboard_image_tag`). `deploy.yml` crea primero los repositorios ECR con `-target`, sube las
+  imágenes y aplica el resto. No se usa `aws lambda update-function-code` ni la action de ECS Express, porque el
+  siguiente `apply` desharía su cambio.
+- **Estado:** CERRADA

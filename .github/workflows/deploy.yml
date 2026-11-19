@@ -1,0 +1,68 @@
+# Despliega infra/main, la API y el cuadro de mando en cada push a main. Credenciales por OIDC (D-0.4).
+# Variables del repositorio (Settings > Variables > Actions), salidas de infra/bootstrap:
+#   AWS_ROLE_ARN, AWS_REGION, TF_STATE_BUCKET, ALIAS y BEDROCK_MODEL_ID.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths: ["infra/main/**", "api/**", "dashboard/**", "src/**", ".github/workflows/deploy.yml"]
+  workflow_dispatch:
+
+permissions:
+  id-token: write # necesario para OIDC
+  contents: read
+
+concurrency: deploy
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  TF_VAR_region: ${{ vars.AWS_REGION }}
+  TF_VAR_alias: ${{ vars.ALIAS }}
+  TF_VAR_bedrock_model_id: ${{ vars.BEDROCK_MODEL_ID }}
+  TF_VAR_api_image_tag: ${{ github.sha }}
+  TF_VAR_dashboard_image_tag: ${{ github.sha }}
+
+jobs:
+  deploy:
+    if: vars.AWS_ROLE_ARN != '' # no hace nada hasta conectar la cuenta (Taller 1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: terraform init
+        run: >
+          terraform -chdir=infra/main init -input=false
+          -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" -backend-config="region=${{ vars.AWS_REGION }}"
+
+      - name: Repositorios ECR (antes que las imágenes)
+        run: >
+          terraform -chdir=infra/main apply -auto-approve -input=false
+          -target=aws_ecr_repository.api -target=aws_ecr_repository.dashboard
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Imágenes
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          docker build --platform linux/amd64 --provenance=false -f api/Dockerfile -t "$REGISTRY/fund-kid-api:$GITHUB_SHA" .
+          docker build --platform linux/amd64 -t "$REGISTRY/fund-kid-dashboard:$GITHUB_SHA" dashboard
+          docker push "$REGISTRY/fund-kid-api:$GITHUB_SHA"
+          docker push "$REGISTRY/fund-kid-dashboard:$GITHUB_SHA"
+
+      - name: terraform apply
+        run: terraform -chdir=infra/main apply -auto-approve -input=false
+
+      - name: URL de la API
+        run: echo "API -> $(terraform -chdir=infra/main output -raw api_url)" >> "$GITHUB_STEP_SUMMARY"
