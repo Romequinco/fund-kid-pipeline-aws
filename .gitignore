@@ -1,0 +1,61 @@
+# --- Material de clase: local, nunca se versiona (transcripciones con nombres, enunciado y web del curso) ---
+docs/raw/
+
+# --- Datos: los KID y lo extraído viven en S3 y en PostgreSQL, no en Git ---
+data/
+*.pdf
+!docs/**/*.pdf
+
+# --- Credenciales: nunca en el repositorio (regla 5 del enunciado) ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials
+.aws/
+
+# --- Terraform ---
+.terraform/
+.terraform.lock.hcl.bak
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+*.tfplan
+override.tf
+override.tf.json
+*_override.tf
+
+# --- Python ---
+__pycache__/
+*.py[codz]
+*.so
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints
+notebooks/scratch_*.ipynb
+
+# --- Empaquetado de Lambda ---
+*.zip
+package/
+.aws-sam/
+
+# --- Streamlit ---
+.streamlit/secrets.toml
+
+# --- Sistema y editores ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
