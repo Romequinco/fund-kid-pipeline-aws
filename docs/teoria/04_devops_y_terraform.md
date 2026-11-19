@@ -350,7 +350,7 @@ terraform {
 
 ### 8.1 Dos raíces de Terraform
 
-| | `infra/bootstrap/` | `infra/main/` |
+| | `infra/bootstrap/` | `infra/` (`main.tf`, `datos.tf`, `servicios.tf`) |
 |---|---|---|
 | Qué crea | Bucket del estado (versionado), proveedor OIDC, rol de GitHub y sus permisos | S3 de documentos, Aurora, repositorios ECR, Lambda + Function URL, ECS Express, roles de ejecución |
 | Quién lo aplica | Una persona, una vez, desde local con `aws login` | GitHub Actions al hacer `push` a `main` |
@@ -370,13 +370,13 @@ y un `aws_iam_role` cuyo `assume_role_policy` (con `jsonencode`, como en EJ terr
 
 ### 8.2 Permisos del rol de GitHub
 
-- El curso da a su rol ECR, Lambda, ECS y `iam:PassRole` (L22, L23). Para aplicar `main`, el rol además crea roles de IAM, buckets, la base de datos y secretos: necesita bastante más.
+- El curso da a su rol ECR, Lambda, ECS y `iam:PassRole` (L22, L23). Para aplicar `infra/`, el rol además crea roles de IAM, buckets, la base de datos y secretos: necesita bastante más.
 - Compensarlo con una condición de confianza estrecha (solo `main` de `<organización>/<repo>`), `iam:PassRole` limitado a los roles del proyecto y, si se quiere, un *environment* de GitHub con aprobación manual antes del `apply`.
 
 ### 8.3 Workflows
 
-- **`ci.yml`** (en cada `push` y pull request, sin credenciales de AWS): `ruff check .`, `ruff format --check .`, `pytest`, `terraform fmt -check -recursive infra` y `terraform -chdir=infra/main init -backend=false` seguido de `terraform validate`. Base: EJ github-actions/ci.yml.
-- **`deploy.yml`** (`push` a `main`, `needs` del job de tests como en EJ github-actions/deploy-ecs.yml): OIDC (§4.3) → `terraform apply -target` de los repositorios ECR si es la primera vez (§7.6) → build y push de las imágenes de API y dashboard con etiqueta `github.sha` (§5) → `terraform apply -var image_tag=<sha>` de `infra/main`.
+- **`ci.yml`** (en cada `push` y pull request, sin credenciales de AWS): `ruff check .`, `ruff format --check .`, `pytest`, `terraform fmt -check -recursive infra` y `terraform init -backend=false` seguido de `terraform validate` en las dos raíces, y la construcción de las dos imágenes sin subirlas. Base: EJ github-actions/ci.yml.
+- **`deploy.yml`**, con dos jobs. `deploy` (`push` a `main`): OIDC (§4.3) → `terraform apply -target` de los repositorios ECR (§7.6) → build y push de las imágenes de API y dashboard con etiqueta `github.sha` (§5) → `terraform apply` de `infra/` con esa etiqueta. `lote` (cada lunes o a mano): ejecuta `src/pipeline.py` con la configuración leída de `terraform output`.
 - Para instalar Terraform en el runner existe la action `hashicorp/setup-terraform` (no aparece en el curso).
 
 ### 8.4 Un único dueño por recurso

@@ -21,15 +21,20 @@ jobs:
       - run: ruff check .
       - run: pytest
 
-  terraform:
+  infra:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Imágenes (se construyen, no se suben)
+        run: |
+          docker build --platform linux/amd64 --provenance=false -f infra/api.Dockerfile -t api .
+          docker build --platform linux/amd64 -f infra/dashboard.Dockerfile -t dashboard .
+          docker run --rm --entrypoint python api -c "import api, kid_pipeline.db as d; assert d.SQL_ESQUEMA.exists()"
       - uses: hashicorp/setup-terraform@v3
       - run: terraform fmt -check -recursive infra
       - name: validate
         run: |
-          for raiz in infra/bootstrap infra/main; do
+          for raiz in infra/bootstrap infra; do
             terraform -chdir="$raiz" init -backend=false -input=false
             terraform -chdir="$raiz" validate
           done

@@ -1,11 +1,13 @@
-"""Pruebas del paquete común sin AWS: esquema, claves de S3, salida de Bedrock y parámetros de la Data API."""
+"""Pruebas sin AWS: esquema, captura, claves de S3, salida de Bedrock, Data API y la API con una base de datos falsa."""
 
 from datetime import UTC, date, datetime
 
 import pytest
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from kid_pipeline.capture.base import Documento, KidEnlace, prohibidos_con_comodin
+import api
+from kid_pipeline.capture import Documento, KidEnlace, prohibidos_con_comodin
 from kid_pipeline.db import UPSERT_KID, BaseDatos, parametro
 from kid_pipeline.extract import HERRAMIENTA, leer_respuesta, peticion
 from kid_pipeline.schema import Kid, esquema_json, faltan_obligatorios, isin_valido
@@ -112,3 +114,39 @@ def test_carga_idempotente_y_esquema():
     db.crear_esquema()
     sentencias = [c["sql"] for c in rds.llamadas[1:]]
     assert len(sentencias) == 4 and not any(s.lstrip().startswith("--") for s in sentencias)
+
+
+# --- API ---
+
+
+class DbFalsa:
+    def __init__(self, filas):
+        self.filas, self.ultima = filas, None
+
+    def consultar(self, sql, **valores):
+        self.ultima = (sql, valores)
+        return self.filas
+
+
+def cliente(filas):
+    db = DbFalsa(filas)
+    api.db = lambda: db  # sustituye la conexión real
+    return TestClient(api.app), db
+
+
+def test_health():
+    c, _ = cliente([])
+    assert c.get("/health").json() == {"status": "ok"}
+
+
+def test_fondos_con_filtros():
+    c, db = cliente([{"isin": "ES0113900J37"}])
+    assert c.get("/fondos", params={"gestora": "cobas", "sri_min": 3}).status_code == 200
+    sql, valores = db.ultima
+    assert "gestora_fuente = :gestora" in sql and valores == {"sri_min": 3, "sri_max": 7, "gestora": "cobas"}
+    assert c.get("/fondos", params={"sri_max": 9}).status_code == 422
+
+
+def test_fondo_inexistente():
+    c, _ = cliente([])
+    assert c.get("/fondos/ES0113900J37").status_code == 404

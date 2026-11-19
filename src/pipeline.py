@@ -1,8 +1,8 @@
-"""Ejecución por lotes de cada fase. En local con `aws login`; en GitHub Actions con OIDC (pipeline.yml).
+"""Ejecución por lotes de cada fase. En local con `aws login`; en GitHub Actions con OIDC (job `lote` de deploy.yml).
 
-    python scripts/pipeline.py init-db                       crea tablas y vista
-    python scripts/pipeline.py capture [--gestora cobas]     web -> S3 + manifiesto + tabla documentos
-    python scripts/pipeline.py extract [--todos]             S3 -> Bedrock -> tabla kid (por defecto, solo lo pendiente)
+    python src/pipeline.py init-db                       crea tablas y vista
+    python src/pipeline.py capture [--gestora cobas]     web -> S3 + manifiesto + tabla documentos
+    python src/pipeline.py extract [--todos]             S3 -> Bedrock -> tabla kid (por defecto, solo lo pendiente)
 """
 
 from __future__ import annotations
@@ -13,8 +13,8 @@ from datetime import UTC, datetime
 
 import boto3
 
+from kid_pipeline import Config
 from kid_pipeline.capture import FUENTES, SesionEducada
-from kid_pipeline.config import Config
 from kid_pipeline.db import BaseDatos
 from kid_pipeline.extract import extraer
 from kid_pipeline.schema import faltan_obligatorios

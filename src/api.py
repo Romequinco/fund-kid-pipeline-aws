@@ -11,7 +11,7 @@ import boto3
 from fastapi import FastAPI, HTTPException, Query
 from mangum import Mangum
 
-from kid_pipeline.config import Config
+from kid_pipeline import Config
 from kid_pipeline.db import BaseDatos
 
 app = FastAPI(title="Fund KID API", version="0.1.0")

@@ -10,10 +10,10 @@ from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
-from .capture.base import Documento
+from .capture import Documento
 from .schema import Kid
 
-SQL_ESQUEMA = Path(__file__).resolve().parents[2] / "db" / "schema.sql"
+SQL_ESQUEMA = Path(__file__).with_name("schema.sql")
 
 UPSERT_DOCUMENTO = """
 INSERT INTO documentos (sha256, gestora_fuente, url_pdf, url_ficha, s3_key, bytes, descargado_en)

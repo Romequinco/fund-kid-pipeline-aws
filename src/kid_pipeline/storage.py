@@ -12,7 +12,7 @@ from datetime import datetime
 
 from botocore.exceptions import ClientError
 
-from .capture.base import Documento
+from .capture import Documento
 
 
 def clave_pdf(doc: Documento) -> str:

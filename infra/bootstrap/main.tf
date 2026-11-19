@@ -1,4 +1,4 @@
-# Se aplica UNA vez y en local (aws login), porque crea el rol con el que GitHub Actions se autentica (D-5.1):
+# Raíz aparte de infra/. Se aplica UNA vez y en local (aws login), porque crea el rol con el que GitHub Actions se autentica (D-5.1):
 #   cd infra/bootstrap && terraform init && terraform apply -var="alias=<iniciales>"
 # Su estado se queda en local (no hay backend todavía); no se sube a Git (.gitignore).
 
@@ -31,7 +31,7 @@ variable "github_repo" {
   default = "Romequinco/fund-kid-pipeline-aws"
 }
 
-# --- Estado remoto de infra/main ---
+# --- Estado remoto de infra/ ---
 resource "aws_s3_bucket" "tfstate" {
   bucket = "fund-kid-${var.alias}-tfstate"
 }

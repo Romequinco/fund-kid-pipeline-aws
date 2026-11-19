@@ -1,19 +1,28 @@
-# Despliega infra/main, la API y el cuadro de mando en cada push a main. Credenciales por OIDC (D-0.4).
+# AWS con OIDC (D-0.4), dos trabajos:
+#   deploy: en cada push a main (o a mano con fase=deploy) sube las imágenes y aplica infra/.
+#   lote:   cada lunes (o a mano con otra fase) ejecuta src/pipeline.py.
 # Variables del repositorio (Settings > Variables > Actions), salidas de infra/bootstrap:
-#   AWS_ROLE_ARN, AWS_REGION, TF_STATE_BUCKET, ALIAS y BEDROCK_MODEL_ID.
-name: Deploy
+#   AWS_ROLE_ARN, AWS_REGION, TF_STATE_BUCKET, ALIAS y BEDROCK_MODEL_ID. Sin ellas no se hace nada.
+name: AWS
 
 on:
   push:
     branches: [main]
-    paths: ["infra/main/**", "api/**", "dashboard/**", "src/**", ".github/workflows/deploy.yml"]
+    paths: ["infra/**", "src/**", "pyproject.toml", ".github/workflows/deploy.yml"]
+  schedule:
+    - cron: "0 6 * * 1"
   workflow_dispatch:
+    inputs:
+      fase:
+        type: choice
+        options: [deploy, capture-extract, capture, extract, init-db]
+        default: deploy
 
 permissions:
   id-token: write # necesario para OIDC
   contents: read
 
-concurrency: deploy
+concurrency: aws
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION }}
@@ -22,47 +31,67 @@ env:
   TF_VAR_bedrock_model_id: ${{ vars.BEDROCK_MODEL_ID }}
   TF_VAR_api_image_tag: ${{ github.sha }}
   TF_VAR_dashboard_image_tag: ${{ github.sha }}
+  FASE: ${{ inputs.fase || (github.event_name == 'schedule' && 'capture-extract') || 'deploy' }}
 
 jobs:
   deploy:
-    if: vars.AWS_ROLE_ARN != '' # no hace nada hasta conectar la cuenta (Taller 1)
+    if: vars.AWS_ROLE_ARN != '' && (github.event_name == 'push' || inputs.fase == 'deploy')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
-
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_wrapper: false
-
-      - name: terraform init
-        run: >
-          terraform -chdir=infra/main init -input=false
+      - run: >
+          terraform -chdir=infra init -input=false
           -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" -backend-config="region=${{ vars.AWS_REGION }}"
-
-      - name: Repositorios ECR (antes que las imágenes)
+      - name: Repositorios ECR (antes que las imágenes, D-5.4)
         run: >
-          terraform -chdir=infra/main apply -auto-approve -input=false
+          terraform -chdir=infra apply -auto-approve -input=false
           -target=aws_ecr_repository.api -target=aws_ecr_repository.dashboard
-
       - id: ecr
         uses: aws-actions/amazon-ecr-login@v2
-
       - name: Imágenes
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
-          docker build --platform linux/amd64 --provenance=false -f api/Dockerfile -t "$REGISTRY/fund-kid-api:$GITHUB_SHA" .
-          docker build --platform linux/amd64 -t "$REGISTRY/fund-kid-dashboard:$GITHUB_SHA" dashboard
-          docker push "$REGISTRY/fund-kid-api:$GITHUB_SHA"
-          docker push "$REGISTRY/fund-kid-dashboard:$GITHUB_SHA"
+          for img in api dashboard; do
+            docker build --platform linux/amd64 --provenance=false -f "infra/$img.Dockerfile" \
+              -t "$REGISTRY/fund-kid-$img:$GITHUB_SHA" .
+            docker push "$REGISTRY/fund-kid-$img:$GITHUB_SHA"
+          done
+      - run: terraform -chdir=infra apply -auto-approve -input=false
+      - run: echo "API -> $(terraform -chdir=infra output -raw api_url)" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: terraform apply
-        run: terraform -chdir=infra/main apply -auto-approve -input=false
-
-      - name: URL de la API
-        run: echo "API -> $(terraform -chdir=infra/main output -raw api_url)" >> "$GITHUB_STEP_SUMMARY"
+  lote:
+    if: vars.AWS_ROLE_ARN != '' && github.event_name != 'push' && inputs.fase != 'deploy'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e .
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      - name: Configuración desde las salidas de Terraform
+        run: |
+          terraform -chdir=infra init -input=false \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" -backend-config="region=${{ vars.AWS_REGION }}"
+          o() { terraform -chdir=infra output -raw "$1"; }
+          { echo "KID_BUCKET=$(o bucket)"; echo "DB_CLUSTER_ARN=$(o db_cluster_arn)"; echo "DB_SECRET_ARN=$(o db_secret_arn)"
+            echo "DB_NAME=$(o db_name)"; echo "BEDROCK_MODEL_ID=$(o bedrock_model_id)"; } >> "$GITHUB_ENV"
+      - run: |
+          case "$FASE" in
+            capture-extract) python src/pipeline.py capture && python src/pipeline.py extract ;;
+            *) python src/pipeline.py "$FASE" ;;
+          esac

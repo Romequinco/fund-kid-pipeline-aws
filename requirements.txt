@@ -1,7 +1,2 @@
-# Entorno de desarrollo: el paquete, la API, la aplicación y las herramientas de calidad
--e .
--r api/requirements.txt
--r dashboard/requirements.txt
-pytest>=8
-httpx>=0.27
-ruff>=0.6
+# Entorno de desarrollo: el paquete con la API, el cuadro de mando y las herramientas de calidad (extras en pyproject.toml)
+-e .[dev]

@@ -18,12 +18,12 @@
 
 | Fase | Mínimo exigido (ENUNCIADO §4) | Referencia de los talleres (ENUNCIADO §6) | Código del repo |
 |---|---|---|---|
-| Captura | ≥ **2 fuentes** y ≥ **15 documentos**, con origen y fecha de descarga de cada uno | Python con `requests` + BeautifulSoup | `src/kid_pipeline/capture/` |
-| Almacenamiento | PDF en S3 | Amazon S3 | `src/kid_pipeline/storage.py`, `infra/main/storage.tf` |
+| Captura | ≥ **2 fuentes** y ≥ **15 documentos**, con origen y fecha de descarga de cada uno | Python con `requests` + BeautifulSoup | `src/kid_pipeline/capture.py` |
+| Almacenamiento | PDF en S3 | Amazon S3 | `src/kid_pipeline/storage.py`, `infra/datos.tf` |
 | Extracción | Campos del Anexo A con Bedrock y salidas estructuradas | Converse API, script por lotes | `src/kid_pipeline/extract.py`, `schema.py` |
-| Base de datos | PostgreSQL en AWS, sin duplicados al reprocesar | Aurora Serverless v2 con RDS Data API | `src/kid_pipeline/db.py`, `db/schema.sql` |
-| API | API HTTP | FastAPI en Lambda con Function URL | `api/` |
-| Visualización | Aplicación web para explorar los datos | Streamlit en ECS Express Mode | `dashboard/` |
+| Base de datos | PostgreSQL en AWS, sin duplicados al reprocesar | Aurora Serverless v2 con RDS Data API | `src/kid_pipeline/db.py`, `schema.sql` |
+| API | API HTTP | FastAPI en Lambda con Function URL | `src/api.py` |
+| Visualización | Aplicación web para explorar los datos | Streamlit en ECS Express Mode | `src/dashboard.py` |
 | IaC | Terraform desplegado desde GitHub Actions | OIDC, estado en S3 | `infra/`, `.github/workflows/` |
 
 - La arquitectura de referencia es solo eso: "todas las piezas son sustituibles", siempre que se justifique (ENUNCIADO §4, §6). Cada cambio va a [`docs/DECISIONES.md`](../DECISIONES.md).
@@ -120,12 +120,12 @@ Lo demás (lenguaje, librerías, servicios, diseño) es libre.
 
 | Ampliación (ENUNCIADO §4) | Esfuerzo | Qué hay ya en el repo |
 |---|---|---|
-| Webs con JavaScript (Playwright) | Medio | Una `Fuente` más en `capture/gestoras.py` |
+| Webs con JavaScript (Playwright) | Medio | Una `Fuente` más en `src/kid_pipeline/capture.py` |
 | Arquitectura por eventos (S3 → Lambda) | Medio | `extract.extraer` ya es una función pura reutilizable desde un handler |
 | Comparar varios modelos | Bajo | `modelo` se guarda en cada fila de `kid`; basta con ejecutar `extract --todos` con otro `BEDROCK_MODEL_ID` |
 | Precisión frente a KID revisados a mano | Medio | Falta el conjunto revisado y un script de comparación campo a campo |
 | Tests y validaciones en el pipeline de GitHub | Bajo | `ci.yml` ya corre ruff, pytest y `terraform validate` |
-| Alertas cuando cambia un KID | Bajo-medio | `pipeline.yml` corre cada lunes, y un PDF nuevo es un SHA-256 nuevo |
+| Alertas cuando cambia un KID | Bajo-medio | El job `lote` de `deploy.yml` corre cada lunes, y un PDF nuevo es un SHA-256 nuevo |
 | Buscador en lenguaje natural | Alto | Requiere otra llamada a Bedrock en la API |
 
 ---

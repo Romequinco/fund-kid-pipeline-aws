@@ -26,9 +26,18 @@ un correlativo. El estado es `ABIERTA` o `CERRADA`. Las decisiones se añaden al
 ### D-0.3 · Un paquete común como única fuente de verdad
 
 - **Fecha:** 2026-11-19
-- **Decisión:** la lógica vive en `src/kid_pipeline/` (captura, S3, extracción, base de datos). `scripts/` la ejecuta por
-  lotes, y `api/` y `dashboard/` son capas finas que se despliegan como imágenes. Así se prueba sin AWS y no se
-  duplica código entre el lote, la API y la aplicación.
+- **Decisión:** la lógica vive en `src/kid_pipeline/` (captura, S3, extracción, base de datos). `src/pipeline.py` la
+  ejecuta por lotes, y `src/api.py` y `src/dashboard.py` son capas finas que se despliegan como imágenes. Así se prueba
+  sin AWS y no se duplica código entre el lote, la API y la aplicación.
+- **Estado:** CERRADA
+
+### D-0.5 · Estructura compacta: tres carpetas
+
+- **Fecha:** 2026-11-19
+- **Decisión:** como en los talleres de RL, tres carpetas. `src/` contiene todo el código y sus tests (un fichero, como
+  `notebooks/common/test_common.py`); `infra/` contiene Terraform y los Dockerfiles; `docs/` contiene las decisiones y
+  la teoría. Las dependencias de cada imagen son *extras* de `pyproject.toml` (`api`, `dashboard`, `dev`), sin un
+  `requirements.txt` por servicio, y un único workflow de AWS (`deploy.yml`) despliega y ejecuta el lote.
 - **Estado:** CERRADA
 
 ### D-0.4 · Sin credenciales en el repositorio
@@ -131,7 +140,7 @@ un correlativo. El estado es `ABIERTA` o `CERRADA`. Las decisiones se añaden al
 
 - **Fecha:** 2026-11-19
 - **Decisión:** `infra/bootstrap/` crea, una sola vez y desde local, el bucket del estado, el proveedor OIDC y el rol de
-  GitHub. `infra/main/` contiene todo lo demás y lo aplica GitHub Actions con el estado en S3 (`use_lockfile`).
+  GitHub. `infra/` contiene todo lo demás y lo aplica GitHub Actions con el estado en S3 (`use_lockfile`).
 - **Por qué:** el rol con el que Actions se autentica no puede crearse desde el propio Actions.
 - **Estado:** CERRADA
 
@@ -148,7 +157,7 @@ un correlativo. El estado es `ABIERTA` o `CERRADA`. Las decisiones se añaden al
 ### D-5.3 · Permisos del rol de GitHub
 
 - **Fecha:** 2026-11-19
-- **Decisión provisional:** `PowerUserAccess` + `IAMFullAccess`, porque `infra/main` crea roles y Terraform necesita
+- **Decisión provisional:** `PowerUserAccess` + `IAMFullAccess`, porque `infra/` crea roles y Terraform necesita
   gestionarlos. La confianza ya está limitada a este repositorio (`repo:Romequinco/fund-kid-pipeline-aws:*`).
 - **Pendiente:** el curso pide, "para nota", limitar los permisos a los recursos propios (lección 28). Opción: una
   política propia por prefijo `fund-kid-*` y restringir la condición a la rama `main`.

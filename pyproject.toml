@@ -3,12 +3,12 @@ name = "kid-pipeline"
 version = "0.1.0"
 description = "Pipeline de KID de fondos en AWS: captura, S3, Bedrock y PostgreSQL."
 requires-python = ">=3.13"
-dependencies = [
-    "boto3>=1.40",
-    "requests>=2.32",
-    "beautifulsoup4>=4.12",
-    "pydantic>=2.8",
-]
+dependencies = ["boto3>=1.40", "requests>=2.32", "beautifulsoup4>=4.12", "pydantic>=2.8"]
+
+[project.optional-dependencies]
+api = ["fastapi>=0.115", "mangum>=0.19"]           # imagen de Lambda
+dashboard = ["streamlit>=1.40", "pandas>=2.2"]      # imagen de ECS Express
+dev = ["kid-pipeline[api,dashboard]", "pytest>=8", "httpx>=0.27", "ruff>=0.6"]
 
 [build-system]
 requires = ["setuptools>=70"]
@@ -17,9 +17,12 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+kid_pipeline = ["schema.sql"]
+
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["src", "api"]
+testpaths = ["src"]
+pythonpath = ["src"]
 
 [tool.ruff]
 line-length = 120
