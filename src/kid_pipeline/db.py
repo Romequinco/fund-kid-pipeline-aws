@@ -23,15 +23,18 @@ ON CONFLICT (sha256) DO NOTHING
 
 UPSERT_KID = """
 INSERT INTO kid (documento_sha256, isin, nombre_producto, nombre_clase, gestora, fecha_documento, sri,
-                 periodo_mantenimiento_anios, gastos_corrientes_pct, costes_entrada_pct, costes_salida_pct, modelo)
+                 periodo_mantenimiento_anios, gastos_corrientes_pct, costes_entrada_pct, costes_salida_pct, modelo,
+                 evidencias, evidencias_ok)
 VALUES (:documento_sha256, :isin, :nombre_producto, :nombre_clase, :gestora, :fecha_documento, :sri,
-        :periodo_mantenimiento_anios, :gastos_corrientes_pct, :costes_entrada_pct, :costes_salida_pct, :modelo)
+        :periodo_mantenimiento_anios, :gastos_corrientes_pct, :costes_entrada_pct, :costes_salida_pct, :modelo,
+        CAST(:evidencias AS JSONB), :evidencias_ok)
 ON CONFLICT (documento_sha256) DO UPDATE SET
     isin = EXCLUDED.isin, nombre_producto = EXCLUDED.nombre_producto, nombre_clase = EXCLUDED.nombre_clase,
     gestora = EXCLUDED.gestora, fecha_documento = EXCLUDED.fecha_documento, sri = EXCLUDED.sri,
     periodo_mantenimiento_anios = EXCLUDED.periodo_mantenimiento_anios,
     gastos_corrientes_pct = EXCLUDED.gastos_corrientes_pct, costes_entrada_pct = EXCLUDED.costes_entrada_pct,
-    costes_salida_pct = EXCLUDED.costes_salida_pct, modelo = EXCLUDED.modelo, extraido_en = now()
+    costes_salida_pct = EXCLUDED.costes_salida_pct, modelo = EXCLUDED.modelo, evidencias = EXCLUDED.evidencias,
+    evidencias_ok = EXCLUDED.evidencias_ok, extraido_en = now()
 """
 
 
@@ -49,6 +52,8 @@ def parametro(nombre: str, valor) -> dict:
         return {"name": nombre, "value": {"stringValue": valor.strftime("%Y-%m-%d %H:%M:%S")}, "typeHint": "TIMESTAMP"}
     if isinstance(valor, date):
         return {"name": nombre, "value": {"stringValue": valor.isoformat()}, "typeHint": "DATE"}
+    if isinstance(valor, dict | list):
+        return {"name": nombre, "value": {"stringValue": json.dumps(valor, ensure_ascii=False)}, "typeHint": "JSON"}
     return {"name": nombre, "value": {"stringValue": str(valor)}}
 
 
@@ -78,5 +83,13 @@ class BaseDatos:
                       url_ficha=e.url_ficha, s3_key=s3_key, bytes=len(doc.contenido),
                       descargado_en=doc.descargado_en)
 
-    def guardar_kid(self, sha256: str, kid: Kid, modelo: str) -> None:
-        self.ejecutar(UPSERT_KID, documento_sha256=sha256, modelo=modelo, **kid.model_dump())
+    def guardar_kid(self, sha256: str, kid: Kid, modelo: str, revision: dict[str, dict] | None = None) -> None:
+        """Upsert de la extracción con sus evidencias (D-2.4).
+
+        `revision` es `extract.revisar(kid, markdown)`: por campo, la evidencia y si aparece en el texto y cuadra con
+        su valor; `evidencias_ok` dice si todo cuadra. Sin ella se guardan solo los fragmentos y `evidencias_ok` a null.
+        """
+        evidencias = revision or {c: {"evidencia": ev} for c, ev in kid.evidencias.items()}
+        ok = all(r["aparece"] and r["coherente"] for r in revision.values()) if revision else None
+        self.ejecutar(UPSERT_KID, documento_sha256=sha256, modelo=modelo, evidencias=evidencias, evidencias_ok=ok,
+                      **kid.valores())

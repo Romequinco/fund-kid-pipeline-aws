@@ -77,7 +77,9 @@ documentación. La lógica vive en un único paquete y el resto son capas finas 
 │   │   ├── schema.py           # campos del Anexo A (Pydantic), esquema estricto para Bedrock, ISIN
 │   │   ├── capture.py          # sesión educada (User-Agent, robots.txt, pausa) y una fuente por gestora
 │   │   ├── storage.py          # S3: kid/<gestora>/<sha256>.pdf con metadatos de origen, y manifiesto JSONL
-│   │   ├── extract.py          # Bedrock Converse: PDF como documento, herramienta en modo estricto
+│   │   ├── texto.py            # PDF -> Markdown de las 3 páginas del KID (pymupdf4llm)
+│   │   ├── extract.py          # Bedrock sobre el Markdown: herramienta estricta y evidencia literal por campo
+│   │   ├── reglas.py           # extractor por reglas: línea base para evaluar Bedrock
 │   │   ├── db.py  schema.sql   # RDS Data API: upsert idempotente; tablas documentos y kid, vista kid_vigente
 │   │   └── __init__.py         # Config por variables de entorno
 │   ├── pipeline.py             # lote: init-db | capture | extract
@@ -147,6 +149,23 @@ Los 68 son KID PRIIPs, sin errores ni duplicados; la segunda captura dio 68 "sin
 `verificar` comprueba la integridad de todo lo guardado y, en lo vigente, que cada PDF sea un KID y que el ISIN, la
 clase y la fecha que da la web estén en el PDF, sin ISIN ni clases repetidos.
 
+Del PDF a los datos, también en local (D-2.3 a D-2.5):
+
+```powershell
+.\.venv\Scripts\python.exe src/pipeline.py markdown                     # PDF -> Markdown del KID en data/markdown/
+.\.venv\Scripts\python.exe src/pipeline.py evaluar                      # extractor por reglas frente a la referencia
+.\.venv\Scripts\python.exe src/pipeline.py evaluar --predicciones data/extraccion/<modelo>.jsonl
+```
+
+`evaluar` compara campo a campo con `data/referencia.json` (17 KID revisados a mano, no versionado):
+- **En la referencia:** exactitud por campo y global, nulls acertados, valores inventados u omitidos y la lista de
+  discrepancias.
+- **En los 68 KID:** el ISIN y la clase frente al manifiesto, y la cobertura por campo.
+
+El JSONL de un modelo lleva una línea por documento (`sha256` y los 10 campos del Anexo A), así que se comparan modelos
+sin volver a llamar a Bedrock. Las reglas aciertan hoy 170 de 170 campos de la referencia. Es una línea base
+sobreajustada: se escribieron estudiando esos mismos KID.
+
 Despliegue, en tres pasos:
 
 1. **Bootstrap, una vez y en local** (`aws login`):
@@ -164,6 +183,9 @@ de clase no se versiona: quien lo necesite lo copia en `docs/raw/`.
 
 - **Un único esquema.** Los campos salen de `schema.Kid`, que da el esquema de Bedrock, la validación y las columnas de
   `kid`. Añadir un campo es tocar `Kid`, `schema.sql` y `UPSERT_KID`.
+- **Cada dato trae su prueba.** Cada campo extraído lleva el fragmento literal del KID del que sale. Se comprueba que
+  ese fragmento está en el documento y que cuadra con el valor, y el resultado se guarda en `kid.evidencias`
+  ([D-2.4](docs/DECISIONES.md)).
 - **Null antes que inventar.** Todo campo es opcional en la extracción. Los obligatorios del Anexo A se comprueban
   después (`faltan_obligatorios`) y se registran, no se rellenan.
 - **El SHA-256 del PDF es la identidad** del documento en S3 y en la base de datos. Procesar dos veces no duplica.
@@ -198,6 +220,7 @@ de clase no se versiona: quien lo necesite lo copia en `docs/raw/`.
 - [x] Estructura completa y compacta: paquete común, API, cuadro de mando, Terraform, workflows y tests
 - [x] Documentación de teoría (`docs/teoria/`), hasta la clase del 14/11 y la web del curso
 - [x] Taller 1, captura: las tres gestoras en local, con manifiesto, `verificar` y tests (68 KID)
+- [x] Extracción sin AWS: Markdown del KID, esquema con evidencias, extractor por reglas y evaluación (17 KID de referencia)
 - [ ] Taller 1, AWS: conexión GitHub-AWS, bucket y base de datos con Terraform
 - [ ] Taller 2: extracción con Bedrock, carga en PostgreSQL, API y aplicación desplegadas
 - [ ] Taller 3: exposición

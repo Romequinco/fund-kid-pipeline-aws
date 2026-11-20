@@ -1,6 +1,8 @@
 """Pruebas sin AWS: esquema, captura, claves de S3, salida de Bedrock, Data API y la API con una base de datos falsa."""
 
+import copy
 import hashlib
+import json
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -12,6 +14,7 @@ from pydantic import ValidationError
 import api
 import kid_pipeline.capture as capture_mod
 import pipeline
+from kid_pipeline import reglas
 from kid_pipeline.capture import (
     FUENTES,
     Azvalor,
@@ -33,8 +36,25 @@ from kid_pipeline.capture import (
     validar_pdf,
 )
 from kid_pipeline.db import UPSERT_KID, BaseDatos, parametro
-from kid_pipeline.extract import HERRAMIENTA, leer_respuesta, peticion
-from kid_pipeline.schema import Kid, esquema_json, faltan_obligatorios, isin_valido
+from kid_pipeline.extract import (
+    HERRAMIENTA,
+    coherencia,
+    extraer,
+    leer_respuesta,
+    peticion,
+    revisar,
+    verificar_evidencias,
+)
+from kid_pipeline.reglas import extraer_reglas, fecha_documento, periodo_mantenimiento, sri
+from kid_pipeline.schema import (
+    CAMPOS,
+    Kid,
+    comprobar_estricto,
+    esquema_json,
+    faltan_obligatorios,
+    isin_valido,
+    recuento,
+)
 from kid_pipeline.storage import (
     clave_manifiesto,
     clave_pdf,
@@ -46,6 +66,7 @@ from kid_pipeline.storage import (
     registro,
     vigentes,
 )
+from pipeline import clave_texto, coherencia_manifiesto, coincide, evaluar_extraccion, leer_predicciones
 
 DOC = Documento(KidEnlace("cobas", "https://ejemplo.es/kid.pdf", "https://ejemplo.es/fondo", isin_web="ES0113900J37"),
                 b"%PDF-1.7 prueba", datetime(2026, 11, 19, 10, 0, tzinfo=UTC))
@@ -106,10 +127,10 @@ def test_esquema_cumple_el_modo_estricto():
 
 
 def test_peticion_bedrock_fuerza_la_herramienta():
-    p = peticion(b"%PDF", "modelo")
+    p = peticion("Texto del KID", "modelo")
     assert p["toolConfig"]["toolChoice"] == {"tool": {"name": HERRAMIENTA}}
     assert p["toolConfig"]["tools"][0]["toolSpec"]["strict"] is True
-    assert p["messages"][0]["content"][0]["document"]["format"] == "pdf"
+    assert "Texto del KID" in p["messages"][0]["content"][0]["text"]  # el Markdown del KID, no el PDF (D-2.4)
 
 
 def test_leer_respuesta_bedrock():
@@ -588,3 +609,524 @@ def test_web_real(nombre, minimo):
     assert all(k.url_pdf.lower().split("?")[0].endswith(".pdf") for k in kids)
     assert all(isin_valido(k.isin_web) for k in kids if k.isin_web)
     assert len({k.url_pdf for k in kids}) == len(kids)
+
+
+# --- PDF -> Markdown del KID (texto.py) ---
+
+def test_normalizar_y_aparece():
+    from kid_pipeline.texto import aparece, normalizar
+
+    assert normalizar("**Gastos** corrientes: 1, 78 %") == "gastoscorrientes:1,78%"
+    assert aparece("Indicador de riesgo: 4", "| **Indicador de riesgo:** | 4 |")
+    assert aparece("Período de mantenimiento", "PERIODO DE MANTENIMIENTO recomendado")
+    assert not aparece("", "texto") and not aparece(None, "texto") and not aparece("5 años", "3 años")
+
+
+def test_kid_markdown_solo_lee_las_paginas_del_kid(monkeypatch):
+    import pymupdf
+
+    from kid_pipeline import texto
+
+    doc = pymupdf.open()
+    for n in range(1, 6):
+        doc.new_page().insert_text((72, 72), f"Pagina {n} del documento")
+    pdf = doc.tobytes()
+    md = texto.kid_markdown(pdf)
+    assert "Pagina 3" in md and "Pagina 4" not in md  # el anexo (Cobas) no se convierte
+    assert "Pagina 2" in texto.kid_markdown(pdf, paginas=2) and "Pagina 3" not in texto.kid_markdown(pdf, paginas=2)
+
+
+def test_markdown_local_convierte_y_reutiliza(tmp_path):
+    import pymupdf
+
+    doc = pymupdf.open()
+    doc.new_page().insert_text((72, 72), "Documento de datos fundamentales ISIN ES0112611001")
+    contenido = doc.tobytes()
+    momento = datetime(2026, 11, 19, 10, 0, tzinfo=UTC)
+    d = Documento(KidEnlace("azvalor", "https://a.es/k.pdf", "https://a.es/f"), contenido, momento)
+    guardar_local(tmp_path, d)
+    escribir_manifiesto_local(tmp_path, momento, [linea_manifiesto(d)])
+    assert pipeline.markdown_local(tmp_path) == {"convertidos": 1, "reutilizados": 0, "fallos": []}
+    assert pipeline.markdown_local(tmp_path)["reutilizados"] == 1
+    [(r, md)] = pipeline.kids_locales(tmp_path)
+    assert r["sha256"] == d.sha256 and "ES0112611001" in md
+
+
+# --- Evidencias por campo (D-2.4) ---
+# Evidencias por campo (D-2.4): esquema estricto, extracción sobre Markdown, verificación y carga. Sin AWS.
+MD = """
+Denominación del producto: FONDO EJEMPLO GLOBAL, FI CLASE A
+
+ISIN: ES0123456784 Nombre del productor del PRIIP: GESTORA DE PRUEBA SGIIC, S.A.
+
+|**Fecha document**|**o:**<br>15 de marzo de 2026|
+
+<!-- Start of picture text -->
+4<br><!-- End of picture text -->
+
+Hemos clasificado este producto en la clase de riesgo [4] en una escala de 7, en la que 4 significa un riesgo medio.
+
+|**Período de ma**|**ntenimiento recomendado: 5 años**|
+
+|**Costes de entrada**|No cobramos comisión de entrada.|0 €|
+|**Costes de salida**|La comisión de salida es de 1, 50 % del importe.|150 €|
+|**Comisiones de gestión y otros**<br>**costes administrativos**|1,25 % del valor de su inversión<br>al año.|125 €|
+"""
+
+ENTRADA = {  # lo que devolvería el modelo: evidencia literal y valor
+    "isin_evidencia": "ISIN: ES0123456784", "isin": "ES0123456784",
+    "nombre_producto_evidencia": "Denominación del producto: FONDO EJEMPLO GLOBAL, FI CLASE A",
+    "nombre_producto": "Fondo Ejemplo Global, FI",
+    "nombre_clase_evidencia": "FONDO EJEMPLO GLOBAL, FI CLASE A", "nombre_clase": "Clase A",
+    "gestora_evidencia": "Nombre del productor del PRIIP: GESTORA DE PRUEBA SGIIC, S.A.",
+    "gestora": "GESTORA DE PRUEBA SGIIC, S.A.",
+    "fecha_documento_evidencia": "Fecha documento: 15 de marzo de 2026", "fecha_documento": "2026-03-15",
+    "sri_evidencia": "Hemos clasificado este producto en la clase de riesgo [4] en una escala de 7", "sri": 4,
+    "periodo_mantenimiento_anios_evidencia": "Período de mantenimiento recomendado: 5 años",
+    "periodo_mantenimiento_anios": 5,
+    "gastos_corrientes_pct_evidencia": "1,25 % del valor de su inversión al año.", "gastos_corrientes_pct": 1.25,
+    "costes_entrada_pct_evidencia": "No cobramos comisión de entrada.", "costes_entrada_pct": 0,
+    "costes_salida_pct_evidencia": "La comisión de salida es de 1,50 % del importe.", "costes_salida_pct": 1.5,
+}
+
+
+def respuesta_herramienta(entrada: dict, stop: str = "tool_use") -> dict:
+    return {"stopReason": stop, "output": {"message": {"content": [
+        {"text": "Registro los datos."}, {"toolUse": {"toolUseId": "t1", "name": HERRAMIENTA, "input": entrada}}]}}}
+
+
+# --- Esquema y límites del modo estricto ---
+
+
+def test_esquema_cumple_los_limites_del_modo_estricto():
+    esquema = esquema_json()
+    assert comprobar_estricto(esquema) == []
+    assert recuento(esquema) == {"propiedades": 20, "opcionales": 0, "uniones": 10}
+    nombres = list(esquema["properties"])
+    for c in CAMPOS:  # la evidencia va justo antes de su campo y es una cadena, no una unión
+        assert nombres.index(f"{c}_evidencia") == nombres.index(c) - 1
+        assert esquema["properties"][f"{c}_evidencia"]["type"] == "string"
+    assert {"type": "integer", "enum": [1, 2, 3, 4, 5, 6, 7]} in esquema["properties"]["sri"]["anyOf"]
+
+
+def test_evidencias_nullable_pasarian_del_limite_de_uniones():
+    esquema = copy.deepcopy(esquema_json())
+    for c in CAMPOS:
+        esquema["properties"][f"{c}_evidencia"] = {"type": ["string", "null"]}
+    assert comprobar_estricto(esquema) == ["20 propiedades con unión de tipos (máximo 16)"]
+
+
+def test_comprobar_estricto_detecta_cada_incumplimiento():
+    malo = {"type": "object", "additionalProperties": False, "required": [],
+            "properties": {f"p{i}": {"type": "string"} for i in range(13)} | {
+                "n": {"type": "number", "minimum": 0},
+                "lista": {"type": "array", "minItems": 2, "items": {"type": "string", "pattern": "^(?!x).*$"}},
+                "sub": {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]},
+                "nodo": {"$ref": "#/$defs/Nodo"}},
+            "$defs": {"Nodo": {"type": "object", "additionalProperties": False, "required": ["hijo"],
+                               "properties": {"hijo": {"$ref": "#/$defs/Nodo"}}}}}
+    fallos = comprobar_estricto(malo)
+    assert "#/properties/n: 'minimum' no se admite" in fallos
+    assert "#/properties/lista: minItems 2 (solo 0 o 1)" in fallos
+    assert "#/properties/lista/items: pattern con lookaround" in fallos
+    assert "#/properties/sub: objeto sin additionalProperties: false" in fallos
+    assert "#/$defs/Nodo: esquema recursivo" in fallos
+    assert "17 propiedades opcionales (máximo 12)" in fallos
+
+
+def test_kid_mantiene_los_campos_planos_y_la_validacion():
+    kid = Kid.model_validate(ENTRADA)
+    assert (kid.isin, kid.sri, kid.fecha_documento, kid.costes_entrada_pct) == ("ES0123456784", 4, date(2026, 3, 15), 0)
+    assert list(kid.valores()) == list(CAMPOS) and kid.evidencias["isin"] == "ISIN: ES0123456784"
+    assert Kid(isin="ES0123456784", sri_evidencia=None).sri_evidencia == ""  # null del modelo -> sin evidencia
+    for malo in ({"sri": 8}, {"isin": "ES0123456785"}, {"gastos_corrientes_pct": -1}):
+        with pytest.raises(ValidationError):
+            Kid(**malo)
+
+
+# --- Petición y respuesta de Bedrock (simuladas) ---
+
+
+def test_peticion_lleva_el_markdown_y_la_herramienta_estricta():
+    p = peticion(MD, "modelo")
+    [bloque] = p["messages"][0]["content"]
+    assert "document" not in bloque and "<kid>\n" + MD + "\n</kid>" in bloque["text"]
+    spec = p["toolConfig"]["tools"][0]["toolSpec"]
+    assert spec["strict"] is True and spec["inputSchema"]["json"] == esquema_json()
+    assert p["toolConfig"]["toolChoice"] == {"tool": {"name": HERRAMIENTA}} and "outputConfig" not in p
+    assert "literal" in p["system"][0]["text"] and p["inferenceConfig"]["maxTokens"] >= 1024
+    with pytest.raises(TypeError):
+        peticion(b"%PDF-1.7", "modelo")  # el PDF ya no se envía
+
+
+def test_peticion_con_formato_json_schema():
+    p = peticion(MD, "modelo", mecanismo="formato")
+    formato = p["outputConfig"]["textFormat"]
+    assert formato["type"] == "json_schema" and "toolConfig" not in p
+    assert json.loads(formato["structure"]["jsonSchema"]["schema"]) == esquema_json()
+    respuesta = {"stopReason": "end_turn", "output": {"message": {"content": [{"text": json.dumps(ENTRADA)}]}}}
+    assert leer_respuesta(respuesta, mecanismo="formato").gastos_corrientes_pct == 1.25
+    with pytest.raises(ValueError):
+        peticion(MD, "modelo", mecanismo="otro")
+
+
+def test_leer_respuesta_con_evidencias_y_errores():
+    kid = leer_respuesta(respuesta_herramienta(ENTRADA))
+    assert kid.sri == 4 and kid.sri_evidencia.startswith("Hemos clasificado")
+    with pytest.raises(ValueError, match="maxTokens"):
+        leer_respuesta(respuesta_herramienta(ENTRADA, stop="max_tokens"))
+
+
+def test_extraer_con_cliente_falso():
+    class BedrockFalso:
+        def converse(self, **kw):
+            self.kw = kw
+            return respuesta_herramienta(ENTRADA)
+
+    bedrock = BedrockFalso()
+    kid = extraer(bedrock, MD, "eu.modelo")
+    assert kid.isin == "ES0123456784" and bedrock.kw["modelId"] == "eu.modelo"
+    assert MD in bedrock.kw["messages"][0]["content"][0]["text"]
+
+
+# --- Verificación de las evidencias ---
+
+
+def test_evidencias_buenas_aparecen_y_cuadran():
+    kid = Kid.model_validate(ENTRADA)
+    assert verificar_evidencias(kid, MD) == dict.fromkeys(CAMPOS, True)
+    assert coherencia(kid) == dict.fromkeys(CAMPOS, True)
+
+
+def test_evidencia_inventada_o_ausente_no_se_verifica():
+    kid = Kid.model_validate(ENTRADA | {
+        "gastos_corrientes_pct_evidencia": "Gastos corrientes: 1,25 %",  # no está en el texto
+        "costes_salida_pct_evidencia": "",  # valor sin evidencia
+        "nombre_clase_evidencia": "", "nombre_clase": None})  # null sin evidencia: no afirma nada
+    v = verificar_evidencias(kid, MD)
+    assert (v["gastos_corrientes_pct"], v["costes_salida_pct"], v["nombre_clase"], v["isin"]) == (False, False, True,
+                                                                                                    True)
+
+
+def test_valor_que_no_cuadra_con_su_evidencia():
+    kid = Kid.model_validate(ENTRADA | {
+        "sri": 7,  # la evidencia dice 4; el 7 de «escala de 7» no cuenta
+        "gastos_corrientes_pct": 1.5, "isin": "LU9876543216", "fecha_documento": "2026-03-16",
+        "costes_entrada_pct_evidencia": "No cobramos comisión de entrada.", "costes_entrada_pct": 2,
+        "nombre_clase": "Clase B"})
+    c = coherencia(kid)
+    assert [k for k, ok in c.items() if not ok] == ["isin", "nombre_clase", "fecha_documento", "sri",
+                                                    "gastos_corrientes_pct", "costes_entrada_pct"]
+
+
+def test_coherencia_de_formas_habituales():
+    kid = Kid(periodo_mantenimiento_anios_evidencia="Periodo de mantenimiento recomendado: 18 meses",
+              periodo_mantenimiento_anios=1.5, fecha_documento_evidencia="Fecha: 01/02/2026",
+              fecha_documento=date(2026, 2, 1), costes_salida_pct_evidencia="Costes de salida<br>0%",
+              costes_salida_pct=0, sri_evidencia="riesgo 7 de 7", sri=7)
+    c = coherencia(kid)
+    assert c["periodo_mantenimiento_anios"] and c["fecha_documento"] and c["costes_salida_pct"] and c["sri"]
+    assert not coherencia(Kid(fecha_documento_evidencia="Fecha: 11/02/2026", fecha_documento=date(2026, 2, 1)))[
+        "fecha_documento"]
+
+
+# --- Base de datos ---
+
+
+class RdsFalsoJson:
+    def __init__(self):
+        self.llamadas = []
+
+    def execute_statement(self, **kw):
+        self.llamadas.append(kw)
+        return {"formattedRecords": "[]"}
+
+
+def test_guardar_kid_con_evidencias_es_idempotente():
+    rds, kid = RdsFalsoJson(), Kid.model_validate(ENTRADA)
+    db = BaseDatos(rds, "arn:cluster", "arn:secret", "kid")
+    revision = revisar(kid, MD)
+    db.guardar_kid("a" * 64, kid, "modelo", revision)
+    db.guardar_kid("a" * 64, kid, "modelo", revision)  # mismo documento: misma sentencia, la fila se actualiza
+    params = {p["name"]: p for p in rds.llamadas[0]["parameters"]}
+    assert set(params) == {"documento_sha256", "modelo", "evidencias", "evidencias_ok", *CAMPOS}
+    assert params["evidencias"]["typeHint"] == "JSON" and params["evidencias_ok"]["value"] == {"booleanValue": True}
+    guardado = json.loads(params["evidencias"]["value"]["stringValue"])
+    assert guardado["sri"] == {"evidencia": ENTRADA["sri_evidencia"], "aparece": True, "coherente": True}
+    assert rds.llamadas[0] == rds.llamadas[1]
+    assert "ON CONFLICT (documento_sha256) DO UPDATE" in UPSERT_KID and "evidencias = EXCLUDED.evidencias" in UPSERT_KID
+    assert "CAST(:evidencias AS JSONB)" in UPSERT_KID
+
+
+def test_guardar_kid_sin_revision_y_columnas():
+    rds = RdsFalsoJson()
+    BaseDatos(rds, "c", "s", "kid").guardar_kid("b" * 64, Kid(isin="ES0123456784", isin_evidencia="ISIN"), "m")
+    params = {p["name"]: p["value"] for p in rds.llamadas[0]["parameters"]}
+    assert params["evidencias_ok"] == {"isNull": True}
+    assert json.loads(params["evidencias"]["stringValue"])["isin"] == {"evidencia": "ISIN"}
+    assert parametro("x", {"a": "ñ"})["value"] == {"stringValue": '{"a": "ñ"}'}
+    sql = (Path(__file__).parent / "kid_pipeline" / "schema.sql").read_text(encoding="utf-8")
+    assert "evidencias                   JSONB" in sql and "evidencias_ok                BOOLEAN" in sql
+
+
+# --- Extractor por reglas y evaluación (D-2.5) ---
+# Tests del extractor por reglas y del evaluador (D-2.5), con fragmentos inventados: ningún KID real en el repo.
+TIPO_BESTINVER = """Denominación del producto: FONDO INVENTADO RENTA CLASE R ISIN: ES0111111110 Nombre del \
+productor del PRIIP: GESTORA FICTICIA SGIIC, S.A. Sitio web del productor del PRIIP: www.ejemplo.es
+
+GESTORA FICTICIA, S.A., S.G.I.I.C. está autorizada en España. Fecha de elaboración del documento de datos \
+fundamentales: 30/06/2026
+
+<!-- Start of picture text -->
+1<br><!-- End of picture text -->
+
+**Este indicador de riesgo presupone que usted mantendrá el producto durante 3 años.**
+
+Hemos clasificado este producto en la clase de riesgo 2 en una escala de 7, en la que 2 significa un riesgo bajo.
+
+|**Período de ma**|**ntenimiento recomendado: 3 años**|||
+|---|---|---|---|
+|**Costes totales**|230 €|1.477 €|
+
+|**Costes únicos de entrada o salid**|**En caso de sali**<br>**a**|**da después de 1 año**|
+|---|---|---|
+|**Costes de entrada**|1,5% desde el 1/01/2026 hasta el 31/12/2027, ambos inclusive.|150 €|
+|**Costes de salida**|No cobramos una comisión de salida por este producto.|0 €|
+|**Costes corrientes detraídos cada**|**año**||
+|**Comisiones de gestión y otros**<br>**costes administrativos o de**<br>**funcionamiento**|0,9 % del valor de su \
+inversión al año.|90 €|
+|**Costes de operación**|0,1 % del valor de su inversión al año.|10 €|
+
+El periodo de mantenimiento recomendado es de 3 años. Se deben tener en cuenta los posibles costes de salida.
+"""
+
+TIPO_AZVALOR = """# Documento de 5<sup>a</sup> Datos Fundamentales del Producto
+
+## Inventado Global FI
+
+Fecha de documento 9 de enero de 2026
+
+#### Producto
+
+Inventado Global FI
+
+Entidad  Inventada Asset Management, SGIIC, S.A. Código ISIN  ES0222222228 Dirección web  www.ejemplo.com \
+Fecha de registro del fondo  23 de octubre de 2015
+
+|Riesgo más bajo||Riesgo más alto|
+|---|---|---|
+|1*<br>3<br>2|5<br>4|6<br>7|
+
+Hemos clasificado este producto en la clase de riesgo [5] en una escala de 7, en la que 5 significa «medio alto».
+
+|Periodo de mantenimiento recom<br>Inversión: €10.000|endado: 5 años||
+|---|---|---|
+
+|Costes únicos de entrada o salida<br>En caso de salida después de 1 año|
+|---|
+|Costes de entrada<br>0%|
+|No hay comisión de entrada para este producto<br>0EUR|
+|Costes de salida<br>0%|
+|La comisión de salida es de 0,00%. En caso de participaciones con<br>antigüedad menor a 1 año se aplicara un 3,00%.|
+
+#### Costes corrientes detraídos cada año Comisiones de gestión y otros costes administrativos o de funcionamiento
+
+|1,89% del valor de su inversión por año<br>190EUR|
+|---|
+|Costes de operación|
+|0,14% del valor de su inversión por año<br>15EUR|
+
+Fecha de documento 9 de enero de 2026
+
+#### Período de mantenimiento recomendado: 5 años (debido a la política de inversión)
+"""
+
+TIPO_COBAS = """# **<mark>Inventado Value, FI CLASE B</mark>**
+
+|**Información gen**|**eral**|||
+|---|---|---|---|
+|**Producto:**|Inventado Value, FI CLASE B|**ISIN:**|ES0333333336|
+|**Entidad:**|Inventada Gestión, S.G.I.I.C., S.A.|**Grupo:**|Grupo Ficticio|
+|**Fecha document**|**o:**<br>31 de diciembre de 2025|**Para más infor**|**mación, llame al:**<br>900 00 00 00|
+
+El indicador de riesgos presupone que usted mantendrá el producto durante 5 años. **1 2 3 4 5 6 7**
+
+Hemos clasificado este producto en la clase de riesgo [4] en una escala de 7, en la que 4 significa «un riesgo medio».
+
+|**Periodo de**|**mantenimiento recomendado:**|**5 años**|**En caso**|
+|---|---|---|---|
+
+|**Costes únicos a la entrada o sal**|**ida**|**Incidencia anual**|
+|---|---|---|
+|**Costes de entrada**|No hay comisión de entrada para este producto.<br>La comisión de salida es de 4,00% para \
+participaciones con antigüedad menor a 1 año|0 €|
+|**Costes de salida**|excepto traspasos en el fondo.|400 €|
+|**Costes recurrentes cargados ca**|**da año**||
+|**Comisiones de gestión y otros**|Esto es una estimación basada en los costes reales.<br>1,38% del valor de su \
+inversión por año.|138 €|
+|**Costes de operación**|0,13% del valor de su inversión por año.|13 €|
+
+# **<mark>Período de mantenimiento recomendado: 5 años</mark>**
+"""
+
+TIPO_LUXEMBURGO = """**BESTINVENTO HIGH YIELD CL B2**
+
+Name of Product: BESTINVENTO HIGH YIELD CL B2
+
+ISIN: LU0444444441 Nombre del producto del PRIIP: GESTORA FICTICIA SGIIC, S.A. Sitio web del producto del PRIIP: x.lu
+
+Fecha de elaboración del documento de datos fundamentales: 27/02/2026
+
+**Este indicador de riesgo da por sentado que usted mantendrá el producto durante 5 años.**
+
+Hemos clasificado este producto en la categoría de riesgo **2** en una escala de **7** , lo que corresponde a una \
+clase de riesgo baja.
+
+## **PERÍODO DE MANTENIMIENTO RECOMENDADO: 4 AÑOS**
+
+El periodo de mantenimiento recomendado es de 4 años.
+
+|**Costes de entrada**|No cobramos comisiones de entrada<br>0 €|
+|**Costes de salida**|No cobramos un comisión de salida por este producto<br>0 €|
+|**Comisiones de gestión y**<br>**otros costes**|0,2 % del valor de su inversión al año.<br>19 €|
+"""
+
+
+def test_reglas_formato_bestinver():
+    assert extraer_reglas(TIPO_BESTINVER) == {
+        "isin": "ES0111111110", "nombre_producto": "FONDO INVENTADO RENTA", "nombre_clase": "Clase R",
+        "gestora": "GESTORA FICTICIA SGIIC, S.A.", "fecha_documento": "2026-06-30", "sri": 2,
+        "periodo_mantenimiento_anios": 3.0, "gastos_corrientes_pct": 0.9, "costes_entrada_pct": 1.5,
+        "costes_salida_pct": 0.0}
+
+
+def test_reglas_formato_azvalor():
+    """Fecha en letra (y no la de registro del fondo), SRI entre corchetes, sin clase, salida 0 pese al 3 % del
+    texto (el cuadro dice 0%) y periodo sacado del apartado propio (la tabla lo parte)."""
+    assert extraer_reglas(TIPO_AZVALOR) == {
+        "isin": "ES0222222228", "nombre_producto": "Inventado Global FI", "nombre_clase": None,
+        "gestora": "Inventada Asset Management, SGIIC, S.A.", "fecha_documento": "2026-01-09", "sri": 5,
+        "periodo_mantenimiento_anios": 5.0, "gastos_corrientes_pct": 1.89, "costes_entrada_pct": 0.0,
+        "costes_salida_pct": 0.0}
+
+
+def test_reglas_formato_cobas():
+    """Tabla con «Fecha document|o:» partida, la frase de la comisión de salida en la fila de entrada y el % de
+    gestión detrás del texto."""
+    assert extraer_reglas(TIPO_COBAS) == {
+        "isin": "ES0333333336", "nombre_producto": "Inventado Value, FI", "nombre_clase": "Clase B",
+        "gestora": "Inventada Gestión, S.G.I.I.C., S.A.", "fecha_documento": "2025-12-31", "sri": 4,
+        "periodo_mantenimiento_anios": 5.0, "gastos_corrientes_pct": 1.38, "costes_entrada_pct": 0.0,
+        "costes_salida_pct": 4.0}
+
+
+def test_reglas_formato_luxemburgues():
+    """«CL B2», la errata «producto del PRIIP», SRI en negrita y el periodo recomendado (4) por delante del que
+    presupone el indicador (5)."""
+    e = extraer_reglas(TIPO_LUXEMBURGO)
+    assert (e["isin"], e["nombre_producto"], e["nombre_clase"], e["gestora"]) == (
+        "LU0444444441", "BESTINVENTO HIGH YIELD", "Clase B2", "GESTORA FICTICIA SGIIC, S.A.")
+    assert (e["fecha_documento"], e["sri"], e["periodo_mantenimiento_anios"]) == ("2026-02-27", 2, 4.0)
+    assert (e["gastos_corrientes_pct"], e["costes_entrada_pct"], e["costes_salida_pct"]) == (0.2, 0.0, 0.0)
+
+
+def test_reglas_null_antes_que_adivinar():
+    """Sin datos, todo null; ISIN con dígito de control falso, null; pistas contradictorias, null."""
+    assert extraer_reglas("Documento sin datos del producto.") == dict.fromkeys(CAMPOS)
+    assert extraer_reglas("ISIN: ES0111111111")["isin"] is None
+    assert sri("en la clase de riesgo 3 en una escala de 7 ... en la clase de riesgo 5 en una escala de 7") is None
+    assert periodo_mantenimiento("Periodo de mantenimiento recomendado: 3 años. El periodo de mantenimiento "
+                                 "recomendado es de 5 años") is None
+    assert reglas.coste_unico("Costes únicos | Costes de entrada | 2% | No hay comisión de entrada", "entrada") is None
+    assert reglas.coste_unico("Costes únicos | Costes de entrada | 0 € | 200 €", "entrada") is None  # solo euros: null
+
+
+@pytest.mark.parametrize("texto, esperado", [
+    ("Fecha de elaboración del documento de datos fundamentales: 31/12/2025", "2025-12-31"),
+    ("Fecha documento: 1 de febrero de 2026", "2026-02-01"),
+    ("Fecha de documento 9 de enero de 2026 ... Fecha de documento 9 de enero de 2026", "2026-01-09"),
+    ("Fecha de registro del fondo 23 de octubre de 2015", None),
+    ("Fecha documento: 31/02/2026", None),
+])
+def test_fecha_documento(texto, esperado):
+    assert fecha_documento(texto) == esperado
+
+
+@pytest.mark.parametrize("texto, esperado", [
+    ("Período de mantenimiento recomendado: 18 meses", 1.5),
+    ("El periodo de mantenimiento recomendado es de cinco años", 5.0),
+    ("Este indicador presupone que usted mantendrá el producto durante 1 año.", 1.0),
+])
+def test_periodo_mantenimiento(texto, esperado):
+    assert periodo_mantenimiento(texto) == esperado
+
+
+def test_sri_otras_formas():
+    assert sri("Indicador resumido de riesgo (SRI): 6 de 7") == 6
+    assert sri("SRI 3") == 3
+
+
+def test_limpiar_recompone_etiquetas_partidas():
+    assert "Fecha documento: 31 de" in reglas.limpiar("|**Fecha document**|**o:**<br>31 de|", celdas="")
+    assert "Producto: | Fondo X |" in reglas.limpiar("|**Producto:**|Fondo X|**ISIN:**|")
+
+
+# --- Evaluador ---
+
+def test_comparacion_normalizada():
+    assert coincide("gestora", "Inventada Gestión SGIIC, S.A.", "INVENTADA GESTION, S.G.I.I.C., S.A.")
+    assert coincide("nombre_producto", "Fondo Inventado, F.I. Clase A", "FONDO INVENTADO FI")
+    assert coincide("nombre_clase", "B2", "Clase B2")
+    assert not coincide("nombre_clase", "Clase B", "Clase B2")
+    assert coincide("gastos_corrientes_pct", "1,805", 1.8) and not coincide("gastos_corrientes_pct", 1.84, 1.8)
+    assert not coincide("sri", 3.5, 4) and coincide("sri", "4", 4)
+    assert coincide("fecha_documento", "2026-01-09T00:00:00", "2026-01-09")
+    assert coincide("isin", "es 0111111110", "ES0111111110")
+    assert clave_texto("nombre_producto", "Cobas Seleccíon, FI CLASE B") == "cobasseleccion"
+
+
+def _campos(**valores):
+    return {c: {"valor": valores.get(c)} for c in CAMPOS}
+
+
+def test_evaluar_extraccion():
+    referencia = {
+        "a" * 64: _campos(isin="ES0111111110", sri=4, gastos_corrientes_pct=1.8, costes_salida_pct=0.0),
+        "b" * 64: _campos(isin="ES0222222228", sri=2) | {"gestora": {"valor": "Gestora A", "alternativas": ["B"]}},
+        "c" * 64: _campos(sri=1),
+    }
+    predicciones = {
+        "a" * 64: {"isin": "ES0111111110", "sri": 5, "gastos_corrientes_pct": 1.805, "nombre_clase": "Clase A"},
+        "b" * 64: {"isin": "ES0222222228", "sri": 2, "gestora": "b"},
+    }
+    r = evaluar_extraccion(referencia, predicciones)
+    assert r["sin_prediccion"] == ["c" * 64]
+    assert r["por_campo"]["isin"] == {"exactitud": 0.667, "aciertos": 2, "total": 3, "esperados_null": 1,
+                                      "null_ok": 0, "inventados": 0, "omitidos": 1, "distintos": 0}
+    assert r["por_campo"]["sri"]["distintos"] == 1 and r["por_campo"]["sri"]["aciertos"] == 1
+    assert r["por_campo"]["nombre_clase"]["inventados"] == 1 and r["por_campo"]["nombre_clase"]["null_ok"] == 1
+    assert r["por_campo"]["gestora"]["aciertos"] == 2  # null esperado en «a» y una alternativa en «b»
+    assert r["por_campo"]["costes_salida_pct"]["omitidos"] == 2  # 0 esperado, null obtenido; y «c» sin predicción
+    assert r["global"]["total"] == 30
+    assert {"sha256": "a" * 64, "campo": "sri", "esperado": 4, "obtenido": 5} in r["discrepancias"]
+
+
+def test_coherencia_manifiesto_y_predicciones_jsonl(tmp_path):
+    kids = [({"sha256": "a" * 64, "gestora": "g1", "isin_web": "ES0111111110", "clase": "Clase A"}, ""),
+            ({"sha256": "b" * 64, "gestora": "g1", "isin_web": None, "isin_pdf": "ES0222222228", "clase": None}, ""),
+            ({"sha256": "c" * 64, "gestora": "g2", "isin_web": "ES0333333336", "clase": "Clase B"}, "")]
+    ruta = tmp_path / "modelo.jsonl"
+    ruta.write_text("\n".join(json.dumps(p) for p in [
+        {"sha256": "a" * 64, "isin": "ES0111111110", "nombre_clase": "A", "sri": 4},
+        {"sha256": "b" * 64, "isin": "ES0555555558", "nombre_clase": "Clase C"},
+    ]) + "\n\n", encoding="utf-8")
+    r = coherencia_manifiesto(kids, leer_predicciones(ruta))
+    assert (r["documentos"], r["sin_prediccion"], r["isin_ok"], r["isin_distinto"]) == (2, 1, 1, 1)
+    assert (r["con_clase"], r["clase_ok"], r["clase_solo_extraida"]) == (1, 1, 1)
+    assert r["cobertura"]["sri"] == "1/2" and r["cobertura"]["isin"] == "2/2"
+    assert any("ES0555555558" in a for a in r["avisos"])
+
+
+def test_api_devuelve_las_evidencias_como_objeto():
+    c, _ = cliente([{"isin": "ES0113900J37", "evidencias": '{"sri": {"evidencia": "riesgo 4", "aparece": true}}'}])
+    assert c.get("/fondos").json()[0]["evidencias"]["sri"]["aparece"] is True

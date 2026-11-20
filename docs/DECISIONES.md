@@ -164,18 +164,99 @@ un correlativo. El estado es `ABIERTA` o `CERRADA`. Las decisiones se añaden al
   - Formato de respuesta: `outputConfig.textFormat` con `type: json_schema` y el esquema como cadena.
   - Herramienta en modo estricto: `toolSpec.strict: true` con `inputSchema.json`, y `toolChoice: {tool: {name}}`
     para forzar su uso.
-- **Decisión provisional (2026-11-19):** herramienta estricta (`extract.py`). El esquema sale de `schema.Kid` pero se
-  adapta al modo estricto (`additionalProperties: false`, sin `minimum`/`maximum`); los rangos los valida Pydantic al
-  leer la respuesta.
-- **Por verificar en el Taller 2:** que `toolChoice.tool` funcione con el modelo elegido y la versión mínima de boto3.
-- **Estado:** ABIERTA (se cierra con la solución de referencia del Taller 2)
+- **Decisión (2026-11-20):** herramienta estricta (`toolSpec.strict: true`, `toolChoice: {tool: {name}}`): la
+  respuesta llega como objeto en `toolUse.input`. `extract.peticion(..., mecanismo="formato")` deja implementada la
+  alternativa (`outputConfig.textFormat` con `json_schema`) por si el modelo elegido no acepta `toolChoice.tool`.
+- **Esquema:** sale de `schema.Kid` adaptado al modo estricto (`additionalProperties: false`, sin `minimum`/`maximum`,
+  SRI como `enum` 1-7). `schema.comprobar_estricto` comprueba en los tests que cumple los límites: 20 propiedades,
+  0 opcionales (máximo 12) y 10 uniones (máximo 16). Los rangos los valida Pydantic al leer la respuesta.
+- **Entrada:** el modelo recibe el Markdown del KID (D-2.3), no el PDF. Se mira `stopReason`: con `max_tokens` el JSON
+  llega incompleto y se descarta.
+- **Solución de referencia del profesor:** LangChain (`ChatBedrockConverse.with_structured_output`, método
+  `json_schema`) sobre el Markdown, con un modelo de terceros en `eu-west-3`. Usamos boto3 directamente: una
+  dependencia menos y el mecanismo de salida estructurada a la vista.
+- **Estado:** ABIERTA hasta comprobar `toolChoice.tool` con el modelo real (D-2.2)
 
 ### D-2.2 · Modelo de Bedrock
 
 - **Fecha:** 2026-11-19
-- **Alternativas:** el modelo es libre. Criterios: que admita PDF como entrada y salidas estructuradas en la región
-  elegida, su coste por documento y su precisión en un conjunto de KID revisados a mano (ampliación del enunciado).
+- **Alternativas:** el modelo es libre. Criterios: salidas estructuradas en la región elegida, coste por documento
+  (entrada de unos 4-6 mil tokens de Markdown por KID) y precisión en el conjunto de referencia (D-2.5).
+- **Dato:** la solución de referencia del profesor usa un perfil de inferencia `global.` en `eu-west-3`, lo que apunta a
+  que París sirve como región (D-0.2).
+- **Cómo se elige:** `pipeline.py evaluar --predicciones data/extraccion/<modelo>.jsonl` compara cada candidato con la
+  referencia y con las reglas, sin volver a llamar a Bedrock.
 - **Estado:** ABIERTA
+
+### D-2.3 · El modelo lee el Markdown de las páginas del KID
+
+- **Fecha:** 2026-11-20
+- **Decisión:** `texto.kid_markdown` convierte el PDF a Markdown con `pymupdf4llm`, como la solución de referencia, que
+  conserva títulos, listas y las tablas de costes y escenarios. Solo se convierten las **3 primeras páginas**: el
+  Reglamento PRIIPs limita el KID a 3 caras A4, y Cobas añade en el mismo PDF un anexo de escenarios y rentabilidades
+  pasadas que el modelo no debe leer.
+- **Evidencia:** los 46 KID de Bestinver y Azvalor tienen 3 páginas, y en los 22 de Cobas la página 4 empieza el anexo.
+  Los 68 tienen capa de texto: no hace falta OCR, a diferencia de la solución de referencia (RapidOCR). Conversión: 68 de
+  68, 1-2,5 s por KID.
+- **Cómo se usa:** `pipeline.py markdown` deja la caché en `data/markdown/<gestora>/<sha256>.md`. `pipeline.extract`
+  convierte cada PDF de S3 antes de llamar a Bedrock.
+- **Coste asumido:** PyMuPDF tiene licencia AGPL, aceptable en un proyecto académico de código abierto.
+- **Estado:** CERRADA
+
+### D-2.4 · Evidencias literales por campo
+
+- **Fecha:** 2026-11-20
+- **Contexto:** la salida estructurada asegura la forma, no el contenido (06 §4.4). La solución de referencia acompaña
+  cada campo con el fragmento del documento del que sale y comprueba que ese fragmento está en el texto.
+- **Alternativas:**
+  - (a) Un objeto por campo `{evidencia, valor}`.
+  - (b) Un objeto `evidencias` con los 10 fragmentos.
+  - (c) Campos planos `<campo>_evidencia`.
+
+  Con evidencias que admiten null, (b) y (c) suman 20 uniones, por encima del límite de 16 del modo estricto. (a)
+  cumple, pero añade 10 objetos anidados.
+- **Decisión:** (c). Cada evidencia es una cadena que no admite null (vacía si el dato no aparece) y va justo antes de
+  su campo, para que el modelo cite primero y extraiga después: 20 propiedades, 0 opcionales y 10 uniones.
+- **Comprobación:** tras extraer, `extract.revisar` mira dos cosas por campo:
+  - Que la evidencia aparece en el Markdown, sin formato, tildes ni espacios.
+  - Que el valor está dentro de ella: el número del SRI o del porcentaje, la fecha, el ISIN o el nombre. Un 0 % cuadra
+    con «no se cobra».
+
+  Se guarda en `kid.evidencias` (JSONB), con `evidencias_ok` como resumen. Una evidencia que no cuadra se registra,
+  no se corrige: es la lista de KID que hay que revisar a mano.
+- **Estado:** CERRADA (se revisa con los resultados de Bedrock real)
+
+### D-2.5 · Extractor por reglas y conjunto de referencia
+
+- **Fecha:** 2026-11-20
+- **Contexto:** la ampliación del enunciado pide «comparar la calidad de extracción de varios modelos» y «medir la
+  precisión con un conjunto de KID revisados a mano». Hace falta una referencia fija y una línea base sin coste.
+- **Decisión:**
+  - **Extractor:** `kid_pipeline/reglas.py` extrae los 10 campos del Anexo A con expresiones regulares sobre el
+    Markdown del KID (D-2.3). Cada campo se busca con varias pistas y queda a null si no hay ninguna o se contradicen.
+    Es la línea base frente a la que se mide Bedrock, y una segunda opinión.
+  - **Referencia:** `data/referencia.json` tiene 17 KID de las tres gestoras. No se versiona, porque los datos solo se
+    exponen por la API y la aplicación. Cubre varias clases de Bestinver y Cobas, los tres Sharpe High Yield
+    luxemburgueses, renta fija, comisiones de entrada y salida distintas de 0 y un KID con el periodo contradictorio.
+    Cada valor guarda su fragmento del KID y la página del PDF.
+  - **Evaluador:** `pipeline.py evaluar` compara cualquier extractor (las reglas o un JSONL por modelo en
+    `data/extraccion/`) campo a campo, con tolerancia de 0,01 en números y comparación normalizada en textos. En los 68
+    KID comprueba además el ISIN y la clase frente al manifiesto y la cobertura por campo.
+- **Criterios de anotación:**
+  - Nombre tal y como aparece, sin la clase. Clase como «Clase X», o null.
+  - Gestora = productor del PRIIP o «Entidad».
+  - Gastos corrientes = solo comisiones de gestión y costes administrativos, en %.
+  - Costes de entrada y salida = el % del cuadro de costes únicos, 0 si dice que no se cobran.
+- **Evidencia (20/11/2026):** las reglas aciertan 170 de 170 campos de la referencia y, en los 68 KID, el ISIN (68/68)
+  y la clase (47/47) del manifiesto, con cobertura completa salvo la clase (47/68; los demás no tienen clase).
+  **Ese 100 % está sobreajustado:** las reglas se escribieron estudiando estos mismos 68 Markdown, y la referencia la
+  anotó la misma persona. Vale como línea base, no como estimación de lo que generaliza.
+- **Pendiente:** que el grupo confirme la referencia (`revisado_por`), en especial:
+  - La gestora de los Sharpe: Bestinver como productor o Waystone como sociedad gestora; se aceptan ambas.
+  - La salida de Azvalor: 0 % en el cuadro, 3 % en el texto para menos de un año.
+  - La salida de Cobas: 4 % para menos de un año.
+  - Las comisiones temporales de los Bonos Institucional.
+- **Estado:** ABIERTA (se cierra al confirmar la referencia y evaluar el modelo de D-2.2)
 
 ---
 

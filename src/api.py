@@ -5,6 +5,7 @@ Solo lectura. Es, con la aplicación, la única puerta a los datos (regla 5 del 
 
 from __future__ import annotations
 
+import json
 from functools import cache
 
 import boto3
@@ -24,6 +25,14 @@ def db() -> BaseDatos:
                      cfg.db_name)
 
 
+def legibles(filas: list[dict]) -> list[dict]:
+    """La Data API devuelve las columnas JSONB como texto: `evidencias` se devuelve como objeto (D-2.4)."""
+    for f in filas:
+        if isinstance(f.get("evidencias"), str):
+            f["evidencias"] = json.loads(f["evidencias"])
+    return filas
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -38,15 +47,15 @@ def fondos(gestora: str | None = None, sri_min: int = Query(1, ge=1, le=7),
     if gestora:
         sql += " AND gestora_fuente = :gestora"
         valores["gestora"] = gestora
-    return db().consultar(sql + " ORDER BY gestora, nombre_producto, nombre_clase", **valores)
+    return legibles(db().consultar(sql + " ORDER BY gestora, nombre_producto, nombre_clase", **valores))
 
 
 @app.get("/fondos/{isin}")
 def fondo(isin: str) -> dict:
     """Todas las versiones del KID de una clase, de la más reciente a la más antigua."""
-    filas = db().consultar(
+    filas = legibles(db().consultar(
         "SELECT k.*, d.url_pdf, d.descargado_en FROM kid k JOIN documentos d ON d.sha256 = k.documento_sha256 "
-        "WHERE k.isin = :isin ORDER BY k.fecha_documento DESC NULLS LAST", isin=isin.upper())
+        "WHERE k.isin = :isin ORDER BY k.fecha_documento DESC NULLS LAST", isin=isin.upper()))
     if not filas:
         raise HTTPException(404, f"No hay KID para {isin}")
     return {"isin": isin.upper(), "vigente": filas[0], "historico": filas[1:]}

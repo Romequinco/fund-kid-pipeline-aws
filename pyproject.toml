@@ -3,7 +3,11 @@ name = "kid-pipeline"
 version = "0.1.0"
 description = "Pipeline de KID de fondos en AWS: captura, S3, Bedrock y PostgreSQL."
 requires-python = ">=3.13"
-dependencies = ["boto3>=1.40", "requests>=2.32", "beautifulsoup4>=4.12", "pydantic>=2.8", "pypdf>=5.0"]
+dependencies = [
+    "boto3>=1.40", "requests>=2.32", "beautifulsoup4>=4.12", "pydantic>=2.8",
+    "pypdf>=5.0",          # lectura del PDF al capturarlo (D-1.5)
+    "pymupdf4llm>=0.2",    # PDF -> Markdown del KID (D-2.3)
+]
 
 [project.optional-dependencies]
 api = ["fastapi>=0.115", "mangum>=0.19"]           # imagen de Lambda

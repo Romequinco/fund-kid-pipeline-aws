@@ -305,6 +305,17 @@ Los nombres de parámetros del ejemplo son los de la referencia de la API; que e
 **Nota (orden de magnitud).** Un KID de 3 páginas con Claude: 3 × (1.500-3.000) tokens de texto + hasta 3 × 1.568 de imagen ≈ 9.000-14.000 tokens de entrada, más unos cientos de salida [Anthropic PDF]. Para 15-50 documentos, la factura de Bedrock es pequeña frente al coste fijo de Aurora o ECS; el riesgo real son las **cuotas** de una cuenta nueva, que se evitan con pausa entre documentos y reintento con espera exponencial.
 
 ---
+### 4.7 Cómo quedó en el repo (20/11/2026)
+
+**Idea.** La extracción está preparada y probada sin AWS. Solo falta llamar al modelo real.
+
+- **Entrada:** el Markdown de las 3 páginas del KID (`pymupdf4llm`), no el PDF. Coincide con la solución de
+  referencia y deja fuera el anexo de Cobas ([D-2.3](../DECISIONES.md)).
+- **Salida:** herramienta estricta con `toolChoice` forzado, y la alternativa `outputConfig.textFormat` implementada.
+  El esquema tiene 20 propiedades: los 10 campos y su evidencia literal. Cumple los límites del modo estricto, con
+  0 opcionales y 10 uniones ([D-2.1](../DECISIONES.md), [D-2.4](../DECISIONES.md)).
+- **Control de calidad:** cada evidencia debe aparecer en el Markdown y cuadrar con su valor. Un extractor por reglas y
+  17 KID revisados a mano permiten medir cualquier modelo con `pipeline.py evaluar` ([D-2.5](../DECISIONES.md)).
 
 ## 5. Aurora PostgreSQL Serverless v2 con RDS Data API
 

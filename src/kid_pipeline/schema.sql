@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS documentos (
     descargado_en   TIMESTAMPTZ NOT NULL
 );
 
+-- `evidencias`: por campo, el fragmento literal del KID y si aparece en su texto y cuadra con el valor (D-2.4);
+-- `evidencias_ok`: todo cuadra (null si no se revisó).
 CREATE TABLE IF NOT EXISTS kid (
     documento_sha256             CHAR(64) PRIMARY KEY REFERENCES documentos (sha256),
     isin                         CHAR(12),
@@ -24,6 +26,8 @@ CREATE TABLE IF NOT EXISTS kid (
     costes_entrada_pct           NUMERIC(6, 3),
     costes_salida_pct            NUMERIC(6, 3),
     modelo                       TEXT        NOT NULL,
+    evidencias                   JSONB,
+    evidencias_ok                BOOLEAN,
     extraido_en                  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

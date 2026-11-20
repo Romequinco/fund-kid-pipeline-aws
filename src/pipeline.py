@@ -2,6 +2,8 @@
 
     python src/pipeline.py capture --local [--gestora cobas] [--dry-run]   web -> data/ (sin AWS)
     python src/pipeline.py verificar                                       comprobaciones de lo capturado en data/
+    python src/pipeline.py markdown                                        PDF -> Markdown del KID en data/markdown/
+    python src/pipeline.py evaluar [--predicciones data/extraccion/x.jsonl] reglas o modelo frente a la referencia
     python src/pipeline.py init-db                                         crea tablas y vista
     python src/pipeline.py capture [--gestora cobas]                       web -> S3 + manifiesto + tabla documentos
     python src/pipeline.py extract [--todos]                               S3 -> Bedrock -> tabla kid
@@ -230,12 +232,46 @@ def verificar(raiz: Path) -> dict:
     return resultado
 
 
+def ruta_markdown(raiz: Path, r: dict) -> Path:
+    """data/markdown/<gestora>/<sha256>.md: el Markdown del KID, junto al PDF del que sale."""
+    return raiz / "markdown" / r["gestora"] / f"{r['sha256']}.md"
+
+
+def markdown_local(raiz: Path, sobrescribir: bool = False) -> dict:
+    """Convierte a Markdown (páginas del KID) cada PDF vigente de `raiz`. Lo ya convertido se reutiliza."""
+    from kid_pipeline.texto import kid_markdown
+
+    hechos = reutilizados = 0
+    fallos = []
+    for r in vigentes(leer_manifiestos_local(raiz)):
+        destino = ruta_markdown(raiz, r)
+        if destino.exists() and not sobrescribir:
+            reutilizados += 1
+            continue
+        try:
+            md = kid_markdown((raiz / r["s3_key"]).read_bytes())
+        except Exception as e:  # un PDF que no se pueda convertir no para el resto
+            fallos.append(f"{r['s3_key']}: {e}")
+            continue
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        destino.write_text(md, encoding="utf-8")
+        hechos += 1
+    return {"convertidos": hechos, "reutilizados": reutilizados, "fallos": fallos}
+
+
+def kids_locales(raiz: Path) -> list[tuple[dict, str]]:
+    """(registro del manifiesto, Markdown) de cada KID vigente ya convertido. Lo usan la extracción y la evaluación."""
+    return [(r, ruta_markdown(raiz, r).read_text(encoding="utf-8"))
+            for r in vigentes(leer_manifiestos_local(raiz)) if ruta_markdown(raiz, r).exists()]
+
+
 def extract(todos: bool) -> None:
     import boto3
 
     from kid_pipeline.db import BaseDatos
-    from kid_pipeline.extract import extraer
+    from kid_pipeline.extract import extraer, revisar
     from kid_pipeline.schema import faltan_obligatorios
+    from kid_pipeline.texto import kid_markdown
 
     cfg = Config.desde_entorno()
     s3 = boto3.client("s3", region_name=cfg.region)
@@ -243,12 +279,203 @@ def extract(todos: bool) -> None:
     db = BaseDatos(boto3.client("rds-data", region_name=cfg.region), cfg.db_cluster_arn, cfg.db_secret_arn, cfg.db_name)
     filtro = "" if todos else "WHERE NOT EXISTS (SELECT 1 FROM kid k WHERE k.documento_sha256 = d.sha256)"
     for fila in db.consultar(f"SELECT sha256, s3_key FROM documentos d {filtro} ORDER BY descargado_en"):
-        pdf = s3.get_object(Bucket=cfg.bucket, Key=fila["s3_key"])["Body"].read()
-        kid = extraer(bedrock, pdf, cfg.modelo_bedrock)
+        md = kid_markdown(s3.get_object(Bucket=cfg.bucket, Key=fila["s3_key"])["Body"].read())  # D-2.3
+        kid = extraer(bedrock, md, cfg.modelo_bedrock)
+        revision = revisar(kid, md)  # D-2.4: ¿cada evidencia está en el KID y cuadra con su valor?
         if faltan := faltan_obligatorios(kid):
             log.warning("%s: faltan campos obligatorios %s", fila["s3_key"], faltan)
-        db.guardar_kid(fila["sha256"], kid, cfg.modelo_bedrock)
+        if no_cuadran := [c for c, r in revision.items() if not (r["aparece"] and r["coherente"])]:
+            log.warning("%s: evidencias que no cuadran %s", fila["s3_key"], no_cuadran)
+        db.guardar_kid(fila["sha256"], kid, cfg.modelo_bedrock, revision)
         log.info("%s -> %s", fila["s3_key"], kid.isin)
+
+
+# --- Evaluación de la extracción frente al conjunto de referencia revisado a mano (D-2.5) ---
+
+TOLERANCIA = 0.01  # en números: puntos porcentuales y años
+_NUMERICOS = {"sri", "periodo_mantenimiento_anios", "gastos_corrientes_pct", "costes_entrada_pct", "costes_salida_pct"}
+_FORMAS_LEGALES = {"fi", "fil", "sicav", "sa", "sgiic", "sgeic", "sau", "sl", "slu"}
+
+
+def clave_texto(campo: str, valor) -> str:
+    """Forma comparable de un texto: sin tildes, mayúsculas, puntuación ni espacios.
+
+    En `nombre_producto` se quitan además la clase («CLASE A», «CL B2») y la forma legal («F.I.», «SICAV SA»); en
+    `nombre_clase`, la palabra «Clase»; en `gestora`, la forma legal («S.G.I.I.C., S.A.» frente a «SGIIC, S.A.»).
+    """
+    import unicodedata
+
+    t = "".join(c for c in unicodedata.normalize("NFKD", str(valor)) if not unicodedata.combining(c)).lower()
+    palabras = re.sub(r"[^a-z0-9]+", " ", t.replace(".", "")).split()
+    if campo == "nombre_producto":
+        if len(palabras) >= 2 and palabras[-2] in ("clase", "cl", "class"):
+            palabras = palabras[:-2]
+        palabras = [p for p in palabras if p not in _FORMAS_LEGALES]
+    elif campo == "nombre_clase":
+        palabras = [p for p in palabras if p not in ("clase", "cl", "class", "serie")]
+    elif campo == "gestora":
+        palabras = [p for p in palabras if p not in _FORMAS_LEGALES]
+    return "".join(palabras)
+
+
+def _como_numero(valor) -> float | None:
+    try:
+        return float(str(valor).replace(",", ".").replace("%", "").strip())
+    except ValueError:
+        return None
+
+
+def coincide(campo: str, obtenido, esperado) -> bool:
+    """¿Es `obtenido` el mismo valor que `esperado` (no nulos)? Números con tolerancia; fechas e ISIN exactos."""
+    if campo in _NUMERICOS:
+        n = _como_numero(obtenido)
+        return n is not None and abs(n - float(esperado)) <= (0 if campo == "sri" else TOLERANCIA)
+    if campo == "fecha_documento":
+        return str(obtenido)[:10] == str(esperado)[:10]
+    if campo == "isin":
+        return str(obtenido).replace(" ", "").upper() == str(esperado).upper()
+    return clave_texto(campo, obtenido) == clave_texto(campo, esperado)
+
+
+def leer_referencia(ruta: Path) -> dict[str, dict]:
+    """sha256 -> {campo: {valor, alternativas, ...}} de `data/referencia.json`."""
+    return {d["sha256"]: d["campos"] for d in json.loads(ruta.read_text(encoding="utf-8"))["documentos"]}
+
+
+def leer_predicciones(ruta: Path) -> dict[str, dict]:
+    """sha256 -> campos de un JSONL con una línea por documento: {"sha256": ..., "isin": ..., ...}."""
+    filas = (json.loads(linea) for linea in ruta.read_text(encoding="utf-8").splitlines() if linea.strip())
+    return {f["sha256"]: f for f in filas}
+
+
+def predecir_reglas(kids: list[tuple[dict, str]]) -> dict[str, dict]:
+    from kid_pipeline.reglas import extraer_reglas
+
+    return {r["sha256"]: extraer_reglas(md) for r, md in kids}
+
+
+def evaluar_extraccion(referencia: dict[str, dict], predicciones: dict[str, dict]) -> dict:
+    """Compara campo a campo con la referencia: exactitud por campo y global, nulls y lista de discrepancias.
+
+    Un null esperado y obtenido es un acierto (`null_ok`); un valor donde la referencia dice null es `inventado`, y
+    un null donde hay valor, `omitido`. Un documento de la referencia sin predicción cuenta como todo omitido.
+    """
+    from kid_pipeline.reglas import CAMPOS
+
+    por_campo = {c: Counter() for c in CAMPOS}
+    discrepancias = []
+    for sha, campos in referencia.items():
+        pred = predicciones.get(sha)
+        for c in CAMPOS:
+            ref, obtenido, cuenta = campos[c], (pred or {}).get(c), por_campo[c]
+            esperados = [v for v in [ref["valor"], *ref.get("alternativas", [])] if v is not None]
+            cuenta["total"] += 1
+            cuenta["esperados_null"] += not esperados
+            if pred is None:  # sin predicción: fallo en todos los campos
+                ok = False
+                cuenta["omitidos"] += 1
+            elif not esperados:
+                ok = obtenido is None
+                cuenta["null_ok" if ok else "inventados"] += 1
+            elif obtenido is None:
+                ok = False
+                cuenta["omitidos"] += 1
+            else:
+                ok = any(coincide(c, obtenido, e) for e in esperados)
+                cuenta["distintos"] += not ok
+            cuenta["aciertos"] += ok
+            if not ok:
+                discrepancias.append({"sha256": sha, "campo": c, "esperado": ref["valor"], "obtenido": obtenido})
+    resumen = {c: {"exactitud": round(n["aciertos"] / n["total"], 3) if n["total"] else None,
+                   **{k: n[k] for k in ("aciertos", "total", "esperados_null", "null_ok", "inventados", "omitidos",
+                                        "distintos")}}
+               for c, n in por_campo.items()}
+    aciertos, total = sum(n["aciertos"] for n in por_campo.values()), sum(n["total"] for n in por_campo.values())
+    return {"documentos": len(referencia), "sin_prediccion": sorted(set(referencia) - set(predicciones)),
+            "por_campo": resumen, "global": {"aciertos": aciertos, "total": total,
+                                             "exactitud": round(aciertos / total, 3) if total else None},
+            "discrepancias": discrepancias}
+
+
+def coherencia_manifiesto(kids: list[tuple[dict, str]], predicciones: dict[str, dict]) -> dict:
+    """En todos los KID vigentes (no solo la referencia): ISIN y clase extraídos frente a los del manifiesto
+    (`isin_web` o, si la web no lo da, `isin_pdf`; `clase`), y cobertura por campo (cuántos no son null)."""
+    from kid_pipeline.reglas import CAMPOS
+
+    cuenta, cobertura, avisos = Counter(), Counter(), []
+    for r, _ in kids:
+        sha = r["sha256"]
+        if sha not in predicciones:
+            cuenta["sin_prediccion"] += 1
+            continue
+        p, ref = predicciones[sha], f"{sha[:12]} ({r['gestora']})"
+        cuenta["documentos"] += 1
+        cobertura.update(c for c in CAMPOS if p.get(c) is not None)
+        if esperado := r.get("isin_web") or r.get("isin_pdf"):
+            if p.get("isin") is None:
+                cuenta["isin_null"] += 1
+                avisos.append(f"{ref}: sin ISIN (manifiesto {esperado})")
+            elif coincide("isin", p["isin"], esperado):
+                cuenta["isin_ok"] += 1
+            else:
+                cuenta["isin_distinto"] += 1
+                avisos.append(f"{ref}: ISIN {p['isin']}, el manifiesto dice {esperado}")
+        if r.get("clase"):
+            cuenta["con_clase"] += 1
+            if p.get("nombre_clase") is not None and coincide("nombre_clase", p["nombre_clase"], r["clase"]):
+                cuenta["clase_ok"] += 1
+            else:
+                cuenta["clase_distinta"] += 1
+                avisos.append(f"{ref}: clase {p.get('nombre_clase')}, el manifiesto dice {r['clase']}")
+        elif p.get("nombre_clase") is not None:
+            cuenta["clase_solo_extraida"] += 1
+    n = cuenta["documentos"]
+    return {**{k: cuenta[k] for k in ("documentos", "sin_prediccion", "isin_ok", "isin_distinto", "isin_null",
+                                      "con_clase", "clase_ok", "clase_distinta", "clase_solo_extraida")},
+            "cobertura": {c: f"{cobertura[c]}/{n}" for c in CAMPOS}, "avisos": avisos}
+
+
+def evaluar(raiz: Path, referencia: Path | None = None, predicciones: Path | None = None,
+            guardar: Path | None = None) -> dict:
+    """Evalúa las reglas (por defecto) o las predicciones de un JSONL frente a la referencia y el manifiesto."""
+    kids = kids_locales(raiz)
+    if predicciones is not None:
+        preds, extractor = leer_predicciones(predicciones), predicciones.stem
+    else:
+        preds, extractor = predecir_reglas(kids), "reglas"
+    if guardar is not None:
+        guardar.parent.mkdir(parents=True, exist_ok=True)
+        guardar.write_text("".join(json.dumps({"sha256": s, **p}, ensure_ascii=False, default=str) + "\n"
+                                   for s, p in preds.items()), encoding="utf-8")
+    ruta_ref = referencia or raiz / "referencia.json"
+    ref = leer_referencia(ruta_ref) if ruta_ref.exists() else {}
+    return {"extractor": extractor, "referencia": evaluar_extraccion(ref, preds) if ref else None,
+            "manifiesto": coherencia_manifiesto(kids, preds)}
+
+
+def imprimir_evaluacion(r: dict) -> None:
+    print("Extractor:", r["extractor"])
+    if (ref := r["referencia"]) is None:
+        print("Sin referencia (data/referencia.json): solo la coherencia con el manifiesto.")
+    else:
+        g = ref["global"]
+        print(f"Referencia: {ref['documentos']} KID, exactitud global {g['exactitud']} ({g['aciertos']}/{g['total']})")
+        for c, n in ref["por_campo"].items():
+            print(f"   {c:<28} {n['exactitud']:.3f}  aciertos {n['aciertos']}/{n['total']}  null_ok "
+                  f"{n['null_ok']}/{n['esperados_null']}  inventados {n['inventados']}  omitidos {n['omitidos']}  "
+                  f"distintos {n['distintos']}")
+        for s in ref["sin_prediccion"]:
+            print("   SIN PREDICCIÓN:", s[:12])
+        for d in ref["discrepancias"]:
+            print(f"   DISCREPANCIA {d['sha256'][:12]} {d['campo']}: esperado {d['esperado']!r}, obtenido "
+                  f"{d['obtenido']!r}")
+    m = r["manifiesto"]
+    print(f"Manifiesto: {m['documentos']} KID con predicción ({m['sin_prediccion']} sin ella); ISIN {m['isin_ok']} "
+          f"iguales, {m['isin_distinto']} distintos, {m['isin_null']} null; clase {m['clase_ok']}/{m['con_clase']} "
+          f"iguales ({m['clase_solo_extraida']} extraídas sin clase en el manifiesto)")
+    print("   cobertura:", ", ".join(f"{c} {v}" for c, v in m["cobertura"].items()))
+    for a in m["avisos"]:
+        print("   AVISO:", a)
 
 
 def imprimir_captura(informes: list[Informe], cambios: dict, dry_run: bool) -> None:
@@ -288,8 +515,16 @@ def main() -> int:
     c.add_argument("--dry-run", action="store_true", help="solo lista los enlaces, sin descargar")
     v = sub.add_parser("verificar")
     v.add_argument("--local", nargs="?", default=RAIZ_LOCAL, const=RAIZ_LOCAL, type=Path)
+    m = sub.add_parser("markdown")
+    m.add_argument("--local", nargs="?", default=RAIZ_LOCAL, const=RAIZ_LOCAL, type=Path)
+    m.add_argument("--sobrescribir", action="store_true", help="vuelve a convertir lo ya convertido")
     e = sub.add_parser("extract")
     e.add_argument("--todos", action="store_true", help="reprocesa también lo ya extraído")
+    ev = sub.add_parser("evaluar")
+    ev.add_argument("--local", nargs="?", default=RAIZ_LOCAL, const=RAIZ_LOCAL, type=Path)
+    ev.add_argument("--referencia", type=Path, help="defecto <local>/referencia.json")
+    ev.add_argument("--predicciones", type=Path, help="JSONL de un modelo (una línea por sha256); sin él, las reglas")
+    ev.add_argument("--guardar", type=Path, help="escribe las predicciones evaluadas en un JSONL")
     args = p.parse_args()
 
     if args.fase == "init-db":
@@ -312,6 +547,14 @@ def main() -> int:
             print("FALLO:", f)
         print("OK" if r["ok"] else "NO OK")
         return 0 if r["ok"] else 1
+    elif args.fase == "markdown":
+        r = markdown_local(args.local, args.sobrescribir)
+        print(f"{r['convertidos']} convertidos, {r['reutilizados']} reutilizados, {len(r['fallos'])} fallos")
+        for f in r["fallos"]:
+            print("FALLO:", f)
+        return 1 if r["fallos"] else 0
+    elif args.fase == "evaluar":
+        imprimir_evaluacion(evaluar(args.local, args.referencia, args.predicciones, args.guardar))
     else:
         extract(args.todos)
     return 0
