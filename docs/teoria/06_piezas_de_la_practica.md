@@ -195,6 +195,17 @@ def url_kid(html: str, base: str, texto: str) -> str | None:
 
 Hace falta un navegador automatizado cuando el enlace **no está en el HTML que devuelve el servidor** sino que lo genera JavaScript (pestañas que cargan por AJAX, botones que montan la URL, banners que bloquean el contenido). Prueba rápida: si `requests` + BeautifulSoup no ven el enlace que sí se ve en el navegador, es contenido dinámico. Playwright para Python controla Chromium, Firefox o WebKit y espera a que la página cargue [Playwright Python]. En las tres fuentes del taller los enlaces aparecían en la respuesta del servidor (WEB), así que Playwright queda como **ampliación** (ENUNCIADO §4).
 
+### 3.6 Cómo quedó en el repo (Taller 1, 19/11/2026)
+
+**Idea.** Lo de este apartado está implementado en `src/kid_pipeline/capture.py` y comprobado con una captura real.
+
+- **Bestinver y robots.txt:** el profesor autorizó en clase descargar sus PDF. Es una excepción solo para esa fuente y su propio servidor, con el motivo guardado en el manifiesto; se mantienen el User-Agent propio y la pausa ([D-1.3](../DECISIONES.md)).
+- **Más KID de los previstos:** los fondos de Bestinver con varias clases tienen una ficha por clase, enlazada solo desde el menú de la ficha principal. Siguiéndolas, Bestinver da 41 KID en lugar de 22 ([D-1.4](../DECISIONES.md)).
+- **El PDF se lee al descargarlo** (pypdf): ISIN, páginas y tipo de documento. Así se rellena el ISIN de las fichas que no lo muestran y se rechaza lo que no es un KID ([D-1.5](../DECISIONES.md)).
+- **Capturas incrementales:** peticiones condicionales (ETag, Last-Modified) y aviso de KID nuevos, cambiados y desaparecidos frente a la captura anterior ([D-1.6](../DECISIONES.md)).
+- **Resultado:** 68 KID de 3 fuentes; `python src/pipeline.py verificar` da OK.
+- **Para el Taller 2:** los PDF de Cobas son el KID (3 páginas) más un anexo de escenarios; la extracción debe leer el KID.
+
 ---
 
 ## 4. Amazon Bedrock: Converse, PDF y salidas estructuradas

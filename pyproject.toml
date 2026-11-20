@@ -3,7 +3,7 @@ name = "kid-pipeline"
 version = "0.1.0"
 description = "Pipeline de KID de fondos en AWS: captura, S3, Bedrock y PostgreSQL."
 requires-python = ">=3.13"
-dependencies = ["boto3>=1.40", "requests>=2.32", "beautifulsoup4>=4.12", "pydantic>=2.8"]
+dependencies = ["boto3>=1.40", "requests>=2.32", "beautifulsoup4>=4.12", "pydantic>=2.8", "pypdf>=5.0"]
 
 [project.optional-dependencies]
 api = ["fastapi>=0.115", "mangum>=0.19"]           # imagen de Lambda
@@ -23,6 +23,8 @@ kid_pipeline = ["schema.sql"]
 [tool.pytest.ini_options]
 testpaths = ["src"]
 pythonpath = ["src"]
+markers = ["red: prueba contra las webs reales (pytest -m red)"]
+addopts = "-m \"not red\""
 
 [tool.ruff]
 line-length = 120

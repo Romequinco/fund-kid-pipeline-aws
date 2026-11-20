@@ -97,7 +97,7 @@
 | Cobas AM | `cobasam.com/productos/` | Ficha con un bloque por clase (A, B, C, D), cada una con su ISIN y su «PRIIP pdf» | Media-alta |
 
 - Se pueden usar otras fuentes públicas: otras gestoras, plataformas de distribución o el registro de la CNMV (ENUNCIADO §3).
-- **Nota:** con Bestinver y Cobas se superan holgadamente los mínimos (2 fuentes y 15 documentos), porque Cobas da varios KID por fondo. Azvalor sería la tercera.
+- **Resultado en el repo (19/11/2026):** las tres fuentes dan 68 KID (Bestinver 41, Azvalor 5, Cobas 22), más de cuatro veces el mínimo. Bestinver y Cobas publican un KID por clase. Las fichas de Azvalor cuelgan hoy de `/fondos-de-inversion/`, no de `/fondos/` ([D-1.3](../DECISIONES.md), [D-1.4](../DECISIONES.md)).
 
 ---
 

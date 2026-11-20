@@ -113,6 +113,40 @@ py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m pytest
 ```
 
+Captura en local, sin AWS: los PDF y el manifiesto van a `data/`, que no se versiona.
+
+```powershell
+.\.venv\Scripts\python.exe src/pipeline.py capture --local      # las tres gestoras (--gestora cobas para una)
+.\.venv\Scripts\python.exe src/pipeline.py verificar            # comprobaciones de lo capturado
+.\.venv\Scripts\python.exe -m pytest -m red                     # parseo contra las webs reales
+```
+
+`capture --dry-run` solo lista los enlaces encontrados, sin descargar nada.
+
+Qué hace la captura ([D-1.4 a D-1.6](docs/DECISIONES.md)):
+
+- **Encuentra el KID por su rótulo**, con las variantes que usan las gestoras («Datos fundamentales», «DFI», «KID»,
+  «PRIIP», «DFP», con o sin tildes) y, si el enlace es un icono, por el nombre del fichero. Sigue las fichas de cada
+  clase (Bestinver tiene una página por clase) y asigna a cada KID el ISIN y la clase de su bloque solo si no hay duda.
+- **Lee cada PDF al descargarlo** y guarda en el manifiesto lo que dice de sí mismo (`isin_pdf`, `paginas`,
+  `tipo_documento`). Rechaza lo que no es un KID (otro documento con el mismo rótulo, o con más de 12 páginas).
+- **Compara con la captura anterior**: lista los KID nuevos, cambiados (mismo ISIN, otro SHA-256) y desaparecidos, y
+  pide cada PDF conocido con `If-None-Match` / `If-Modified-Since` para no volver a bajarlo si no ha cambiado.
+
+Resultado de la captura del 19/11/2026 (el mínimo del enunciado son 2 fuentes y 15 documentos):
+
+| Gestora | Fichas | KID | ISIN de la web en el PDF | ISIN solo en el PDF | Con clase |
+|---|---:|---:|---:|---:|---:|
+| Bestinver | 42 | 41 | 16 | 25 | 27 |
+| Azvalor | 5 | 5 | 5 | 0 | 0 |
+| Cobas | 7 | 22 | 22 | 0 | 20 |
+| **Total** | **54** | **68** | **43** | **25** | **47** |
+
+Los 68 son KID PRIIPs, sin errores ni duplicados; la segunda captura dio 68 "sin cambios" (304).
+
+`verificar` comprueba la integridad de todo lo guardado y, en lo vigente, que cada PDF sea un KID y que el ISIN, la
+clase y la fecha que da la web estén en el PDF, sin ISIN ni clases repetidos.
+
 Despliegue, en tres pasos:
 
 1. **Bootstrap, una vez y en local** (`aws login`):
@@ -163,6 +197,7 @@ de clase no se versiona: quien lo necesite lo copia en `docs/raw/`.
 - [x] Mini base: carpetas por fase y decisiones iniciales
 - [x] Estructura completa y compacta: paquete común, API, cuadro de mando, Terraform, workflows y tests
 - [x] Documentación de teoría (`docs/teoria/`), hasta la clase del 14/11 y la web del curso
-- [ ] Taller 1: captura, manifiesto, conexión GitHub-AWS, bucket y base de datos con Terraform
+- [x] Taller 1, captura: las tres gestoras en local, con manifiesto, `verificar` y tests (68 KID)
+- [ ] Taller 1, AWS: conexión GitHub-AWS, bucket y base de datos con Terraform
 - [ ] Taller 2: extracción con Bedrock, carga en PostgreSQL, API y aplicación desplegadas
 - [ ] Taller 3: exposición
