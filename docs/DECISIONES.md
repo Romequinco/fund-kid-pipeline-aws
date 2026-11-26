@@ -358,7 +358,13 @@ un correlativo. El estado es `ABIERTA` o `CERRADA`. Las decisiones se añaden al
   - **Limitaciones de stlite:** solo admite librerías disponibles en Pyodide; pandas y requests lo están.
   - **Aurora:** la primera consulta tras la pausa automática puede tardar. La API reintenta mientras despierta (D-3.1)
     y la aplicación muestra un aviso si aun así falla.
-- **Evidencia:** probado en local contra la API real: 68 clases, la tabla y el gráfico, sin servidor.
+- **Evidencia:** probado en local y desplegado el 26/11/2026 en https://d3ch9nn1c2vunf.cloudfront.net, con 68 clases,
+  la tabla y el gráfico.
+  - **Primera carga en frío:** ~40 s, entre la descarga de Pyodide y el despertar de Aurora.
+  - **Seguridad:** el acceso directo al bucket da 403 y `http://` redirige a `https://`.
+  - **Recursos:** tras el cambio no queda ningún servicio ECS, balanceador ni IP pública.
+  - **Consola del navegador:** los avisos «Refused to set unsafe header» son inofensivos. `requests` (vía
+    pyodide-http) intenta fijar cabeceras que el navegador gestiona por su cuenta.
 - **ECS Express sigue en el código como alternativa apagada.** Se conservan `infra/dashboard.Dockerfile`, el recurso
   `aws_ecs_express_gateway_service` con `count` y sus roles. Para reactivarlo, se pone la variable de repositorio
   `DESPLEGAR_DASHBOARD=true` y se despliega: el workflow construye su imagen y Terraform crea el servicio (unos 15

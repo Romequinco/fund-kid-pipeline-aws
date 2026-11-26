@@ -21,8 +21,11 @@ Máster MIAX · Módulo Cloud · Práctica B7 · Noviembre 2026<br>
 
 | | URL |
 |---|---|
-| Aplicación (Streamlit en el navegador, S3 + CloudFront) | WEB_URL |
+| Aplicación (Streamlit en el navegador, S3 + CloudFront) | https://d3ch9nn1c2vunf.cloudfront.net |
 | API (FastAPI en Lambda) | https://mozsktwrxdyadipvsc3vsvaxni0hawvo.lambda-url.eu-west-3.on.aws/docs |
+
+La aplicación tarda unos segundos en abrir la primera vez: el navegador descarga Python (Pyodide) y la base de datos
+puede estar despertando de su pausa automática.
 
 En AWS hay 68 KID de 3 gestoras, extraídos con Kimi K3.1 y con sus evidencias revisadas. Rutas de la API:
 - `/fondos`, con los filtros `gestora`, `sri_min` y `sri_max`.
