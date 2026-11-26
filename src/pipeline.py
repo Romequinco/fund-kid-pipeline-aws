@@ -4,6 +4,7 @@
     python src/pipeline.py verificar                                       comprobaciones de lo capturado en data/
     python src/pipeline.py markdown                                        PDF -> Markdown del KID en data/markdown/
     python src/pipeline.py evaluar [--predicciones data/extraccion/x.jsonl] reglas o modelo frente a la referencia
+    python src/pipeline.py cargar --extraccion data/extraccion/<m>.jsonl  data/ -> S3 y base de datos (sin Bedrock)
     python src/pipeline.py init-db                                         crea tablas y vista
     python src/pipeline.py capture [--gestora cobas]                       web -> S3 + manifiesto + tabla documentos
     python src/pipeline.py extract --local --modelo <id> [--limite N]   data/markdown -> Bedrock -> data/extraccion/
@@ -312,6 +313,58 @@ def extract_local(raiz: Path, modelo: str, mecanismo: str = "herramienta", limit
     return {"modelo": modelo, "extraidos": ok, "ya_estaban": len(hechos), "fallos": fallos, "destino": str(destino)}
 
 
+def documento_de(raiz: Path, r: dict):
+    """Reconstruye el `Documento` capturado a partir de su línea del manifiesto y el PDF guardado en local."""
+    from kid_pipeline.capture import Documento, KidEnlace
+
+    enlace = KidEnlace(r["gestora"], r["url_pdf"], r["url_ficha"], r.get("fondo"), r.get("clase"), r.get("isin_web"),
+                       r.get("fecha_web"))
+    return Documento(enlace, (raiz / r["s3_key"]).read_bytes(), datetime.fromisoformat(r["descargado_en"]),
+                     r.get("robots", "respetado"), r.get("etag"), r.get("last_modified"), r.get("http", 200),
+                     huella={k: r.get(k) for k in ("isin_pdf", "paginas", "tipo_documento")})
+
+
+def kid_de(fila: dict):
+    """El `Kid` de una línea de `data/extraccion/<modelo>.jsonl`: sus 10 valores y la evidencia de cada uno."""
+    from kid_pipeline.schema import CAMPOS, EVIDENCIA, Kid
+
+    datos = {c: fila.get(c) for c in CAMPOS}
+    datos |= {c + EVIDENCIA: (fila.get("revision") or {}).get(c, {}).get("evidencia") or "" for c in CAMPOS}
+    return Kid.model_validate(datos)
+
+
+def cargar(raiz: Path, extraccion: Path | None = None) -> dict:
+    """Sube a AWS lo capturado y extraído en local, sin volver a descargar ni a pagar Bedrock.
+
+    PDF y manifiestos a S3 (mismas claves, D-1.2), filas de `documentos` y, si se da el JSONL de un modelo, las de
+    `kid` con sus evidencias. Todo es idempotente: repetirlo no duplica nada.
+    """
+    import boto3
+
+    from kid_pipeline.db import BaseDatos
+
+    cfg = Config.desde_entorno()
+    if not (cfg.bucket and cfg.db_cluster_arn and cfg.db_secret_arn):
+        raise SystemExit("Faltan KID_BUCKET, DB_CLUSTER_ARN o DB_SECRET_ARN (salidas de terraform -chdir=infra output)")
+    s3 = boto3.client("s3", region_name=cfg.region)
+    db = BaseDatos(boto3.client("rds-data", region_name=cfg.region), cfg.db_cluster_arn, cfg.db_secret_arn, cfg.db_name)
+    manifiestos = sorted((raiz / "manifest").glob("*.jsonl"))
+    for m in manifiestos:
+        s3.put_object(Bucket=cfg.bucket, Key=f"manifest/{m.name}", Body=m.read_bytes(),
+                      ContentType="application/x-ndjson")
+    registros = vigentes(leer_manifiestos_local(raiz))
+    for r in registros:
+        db.guardar_documento(documento_de(raiz, r), subir(s3, cfg.bucket, documento_de(raiz, r)))
+    kids = 0
+    if extraccion is not None:
+        validos = {r["sha256"] for r in registros}
+        for fila in leer_predicciones(extraccion).values():
+            if fila["sha256"] in validos:
+                db.guardar_kid(fila["sha256"], kid_de(fila), fila.get("modelo", extraccion.stem), fila.get("revision"))
+                kids += 1
+    return {"manifiestos": len(manifiestos), "documentos": len(registros), "kid": kids}
+
+
 def extract(todos: bool) -> None:
     import boto3
 
@@ -562,6 +615,9 @@ def main() -> int:
     c.add_argument("--dry-run", action="store_true", help="solo lista los enlaces, sin descargar")
     v = sub.add_parser("verificar")
     v.add_argument("--local", nargs="?", default=RAIZ_LOCAL, const=RAIZ_LOCAL, type=Path)
+    cg = sub.add_parser("cargar", help="sube a S3 y a la base de datos lo capturado y extraído en local")
+    cg.add_argument("--local", nargs="?", default=RAIZ_LOCAL, const=RAIZ_LOCAL, type=Path)
+    cg.add_argument("--extraccion", type=Path, help="JSONL de un modelo (data/extraccion/<modelo>.jsonl)")
     m = sub.add_parser("markdown")
     m.add_argument("--local", nargs="?", default=RAIZ_LOCAL, const=RAIZ_LOCAL, type=Path)
     m.add_argument("--sobrescribir", action="store_true", help="vuelve a convertir lo ya convertido")
@@ -599,6 +655,8 @@ def main() -> int:
             print("FALLO:", f)
         print("OK" if r["ok"] else "NO OK")
         return 0 if r["ok"] else 1
+    elif args.fase == "cargar":
+        print(cargar(args.local, args.extraccion))
     elif args.fase == "markdown":
         r = markdown_local(args.local, args.sobrescribir)
         print(f"{r['convertidos']} convertidos, {r['reutilizados']} reutilizados, {len(r['fallos'])} fallos")

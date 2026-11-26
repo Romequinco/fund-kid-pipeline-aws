@@ -17,6 +17,19 @@ Máster MIAX · Módulo Cloud · Práctica B7 · Noviembre 2026<br>
 
 ---
 
+## En marcha
+
+| | URL |
+|---|---|
+| Aplicación (Streamlit en ECS Express) | https://fu-b5912052f4d5431d888307181360b5b0.ecs.eu-west-3.on.aws |
+| API (FastAPI en Lambda) | https://mozsktwrxdyadipvsc3vsvaxni0hawvo.lambda-url.eu-west-3.on.aws/docs |
+
+En AWS hay 68 KID de 3 gestoras, extraídos con Kimi K3.1 y con sus evidencias revisadas. Rutas de la API:
+- `/fondos`, con los filtros `gestora`, `sri_min` y `sri_max`.
+- `/fondos/{isin}`.
+- `/resumen`.
+- `/health`.
+
 ## El problema
 
 Todo fondo que se vende a minoristas en la UE publica un **KID** (*Key Information Document*): unas tres páginas con
@@ -162,6 +175,14 @@ Resultado con Bedrock (26/11/2026, [D-2.2](docs/DECISIONES.md)): **Kimi K3.1** a
 referencia y sus 680 evidencias aparecen en el KID y cuadran con su valor. Nova 2 Lite, sin modo estricto, se queda en
 159 de 170. `extract --local` retoma donde lo dejó: un KID ya extraído no se vuelve a pagar.
 
+Para subir a AWS lo capturado y extraído en local, sin volver a descargar ni a pagar Bedrock, se exportan las salidas de
+Terraform como variables de entorno (ver `.env.example`) y se ejecuta:
+
+```powershell
+.\.venv\Scripts\python.exe src/pipeline.py init-db
+.\.venv\Scripts\python.exe src/pipeline.py cargar --extraccion data/extraccion/global.moonshotai.kimi-k3.1.jsonl
+```
+
 `evaluar` compara campo a campo con `data/referencia.json` (17 KID revisados a mano, no versionado):
 - **En la referencia:** exactitud por campo y global, nulls acertados, valores inventados u omitidos y la lista de
   discrepancias.
@@ -229,6 +250,6 @@ de clase no se versiona: quien lo necesite lo copia en `docs/raw/`.
 - [x] Extracción sin AWS: Markdown del KID, esquema con evidencias, extractor por reglas y evaluación (17 KID de referencia)
 - [x] Taller 1, AWS: cuenta, bootstrap (estado de Terraform, OIDC y rol de GitHub) y variables del repositorio
 - [x] Extracción con Bedrock real (Kimi K3.1): 68 KID, 170/170 en la referencia y 680/680 evidencias
-- [ ] Primer despliegue (`DESPLEGAR=true`): bucket, base de datos, API y aplicación
+- [x] Primer despliegue (`DESPLEGAR=true`): bucket, Aurora, API en Lambda y aplicación en ECS Express, con los 68 KID cargados
 - [ ] Taller 2: extracción con Bedrock, carga en PostgreSQL, API y aplicación desplegadas
 - [ ] Taller 3: exposición

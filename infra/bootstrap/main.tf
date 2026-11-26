@@ -31,6 +31,14 @@ variable "github_repo" {
   default = "Romequinco/fund-kid-pipeline-aws"
 }
 
+# GitHub firma hoy el token con un "sujeto inmutable" que lleva los ID numéricos del usuario y del repositorio
+# (`gh api repos/<repo>/actions/oidc/customization/sub`). Es más seguro: un repositorio nuevo con el mismo nombre
+# tendría otros ID. Se aceptan los dos formatos.
+variable "github_repo_inmutable" {
+  type    = string
+  default = "Romequinco@236243639/fund-kid-pipeline-aws@1464495334"
+}
+
 # --- Estado remoto de infra/ ---
 resource "aws_s3_bucket" "tfstate" {
   bucket = "fund-kid-${var.alias}-tfstate"
@@ -68,7 +76,10 @@ resource "aws_iam_role" "github" {
       Condition = {
         StringEquals = { "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com" }
         # La condición de confianza es lo que limita el acceso a este repositorio
-        StringLike = { "token.actions.githubusercontent.com:sub" = "repo:${var.github_repo}:*" }
+        StringLike = { "token.actions.githubusercontent.com:sub" = [
+          "repo:${var.github_repo_inmutable}:*",
+          "repo:${var.github_repo}:*",
+        ] }
       }
     }]
   })
@@ -82,6 +93,13 @@ resource "aws_iam_role_policy_attachment" "github" {
   ])
   role       = aws_iam_role.github.name
   policy_arn = each.value
+}
+
+# Rol vinculado al servicio ECS: ECS Express lo necesita y AWS solo lo crea solo la primera vez que se entra en ECS desde
+# la consola. En una cuenta que nunca ha usado ECS, el despliegue falla con "Unable to assume the service linked role".
+resource "aws_iam_service_linked_role" "ecs" {
+  aws_service_name = "ecs.amazonaws.com"
+  description      = "Policy to enable Amazon ECS to manage your EC2 instances and related resources." # la de AWS
 }
 
 output "tfstate_bucket" {

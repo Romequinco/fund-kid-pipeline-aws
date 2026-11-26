@@ -25,11 +25,18 @@ def db() -> BaseDatos:
                      cfg.db_name)
 
 
+NUMERICOS = {"gastos_corrientes_pct", "costes_entrada_pct", "costes_salida_pct", "periodo_mantenimiento_anios",
+             "sri_medio", "gastos_corrientes_medios"}
+
+
 def legibles(filas: list[dict]) -> list[dict]:
-    """La Data API devuelve las columnas JSONB como texto: `evidencias` se devuelve como objeto (D-2.4)."""
+    """La Data API devuelve JSONB y NUMERIC como texto: `evidencias` sale como objeto y los decimales como número."""
     for f in filas:
         if isinstance(f.get("evidencias"), str):
             f["evidencias"] = json.loads(f["evidencias"])
+        for c in NUMERICOS & f.keys():
+            if isinstance(f[c], str):
+                f[c] = round(float(f[c]), 4)
     return filas
 
 
@@ -64,9 +71,9 @@ def fondo(isin: str) -> dict:
 @app.get("/resumen")
 def resumen() -> list[dict]:
     """Por gestora: clases, SRI medio y gastos corrientes medios."""
-    return db().consultar(
+    return legibles(db().consultar(
         "SELECT gestora_fuente, COUNT(*) AS clases, AVG(sri) AS sri_medio, "
-        "AVG(gastos_corrientes_pct) AS gastos_corrientes_medios FROM kid_vigente GROUP BY gestora_fuente")
+        "AVG(gastos_corrientes_pct) AS gastos_corrientes_medios FROM kid_vigente GROUP BY gestora_fuente"))
 
 
 handler = Mangum(app)

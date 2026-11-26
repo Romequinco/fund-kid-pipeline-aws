@@ -293,9 +293,11 @@ un correlativo. El estado es `ABIERTA` o `CERRADA`. Las decisiones se añaden al
 - **Contexto:** la referencia es Aurora PostgreSQL Serverless v2 con RDS Data API: no hace falta VPC ni driver desde
   Lambda, y escala a cero si se pausa.
 - **Alternativas:** RDS PostgreSQL clásico con conexión por VPC.
-- **Por verificar:** que la Data API acepte el secreto que gestiona RDS (`manage_master_user_password`, nombre
-  `rds!cluster-...`). Los ejemplos de AWS usan un secreto propio; si falla, se crea el secreto en Terraform.
-- **Estado:** ABIERTA (pendiente de ver el coste real con los créditos de la cuenta)
+- **Comprobado (26/11/2026):** la Data API acepta el secreto que gestiona RDS (`manage_master_user_password`):
+  `init-db` y `cargar` funcionan con él. Aurora Serverless v2 tardó unos 7 minutos en crearse. Con `min_capacity = 0`
+  se pausa sola, y la primera consulta tras la pausa tarda más mientras despierta.
+- **Decisión:** Aurora PostgreSQL Serverless v2 con Data API, como la referencia.
+- **Estado:** CERRADA
 
 ---
 
@@ -324,6 +326,13 @@ un correlativo. El estado es `ABIERTA` o `CERRADA`. Las decisiones se añaden al
 - **Decisión:** `infra/bootstrap/` crea, una sola vez y desde local, el bucket del estado, el proveedor OIDC y el rol de
   GitHub. `infra/` contiene todo lo demás y lo aplica GitHub Actions con el estado en S3 (`use_lockfile`).
 - **Por qué:** el rol con el que Actions se autentica no puede crearse desde el propio Actions.
+- **Aprendido en el primer despliegue (26/11/2026):**
+  - **Sujeto inmutable de GitHub.** GitHub firma el token OIDC con el sujeto inmutable, que lleva los ID numéricos del
+    usuario y del repositorio (`repo:Romequinco@236243639/fund-kid-pipeline-aws@1464495334:…`). La condición de
+    confianza acepta ese formato y el antiguo. Es más seguro: un repositorio nuevo con el mismo nombre tendría otros ID.
+  - **Rol vinculado al servicio ECS.** En una cuenta que nunca ha usado ECS, ECS Express falla con «Unable to assume
+    the service linked role». AWS lo crea en el primer intento, pero no a tiempo. El bootstrap lo declara
+    (`aws_iam_service_linked_role.ecs`), y aquí se importó porque ya existía.
 - **Estado:** CERRADA
 
 ### D-5.2 · Coste de los servicios con precio por hora
@@ -333,6 +342,10 @@ un correlativo. El estado es `ABIERTA` o `CERRADA`. Las decisiones se añaden al
   no se pausa.
 - **Alternativas:** desplegar solo para las pruebas y la exposición, y apagarlo con `terraform destroy` el resto del
   tiempo, o mover la aplicación a una opción sin coste fijo.
+- **Primer despliegue (26/11/2026):** 19 recursos. El cuadro de mando tardó unos 15 minutos en responder la primera
+  vez, mientras se creaban el balanceador y el certificado HTTPS. `DESPLEGAR=true` está activado: cada push que toque
+  `src/`, `infra/` o `pyproject.toml` vuelve a desplegar. Para dejar de pagar el cuadro de mando sin borrar los datos:
+  `terraform -chdir=infra apply -var desplegar_dashboard=false` (o ponerlo en el workflow).
 - **Interruptor (2026-11-26):** `deploy.yml` no despliega ni corre el lote hasta que exista la variable de repositorio
   `DESPLEGAR=true`. Con el rol de GitHub ya creado, cualquier push a `main` desplegaría si no. La variable `desplegar_dashboard` permite apagar solo el
   cuadro de mando, y Aurora se pausa sola a los 10 minutos sin uso (`min_capacity = 0`).

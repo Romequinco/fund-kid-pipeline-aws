@@ -29,6 +29,9 @@ with st.sidebar:
 
 filtros = {"sri_min": sri[0], "sri_max": sri[1]} | ({} if gestora == "Todas" else {"gestora": gestora})
 df = pd.DataFrame(get("/fondos", **filtros))
+for col in ("sri", "periodo_mantenimiento_anios", "gastos_corrientes_pct", "costes_entrada_pct", "costes_salida_pct"):
+    if col in df:
+        df[col] = pd.to_numeric(df[col], errors="coerce")  # por si la API devuelve decimales como texto
 
 if df.empty:
     st.info("No hay fondos con esos filtros.")
@@ -37,7 +40,7 @@ if df.empty:
 c1, c2, c3 = st.columns(3)
 c1.metric("Clases", len(df))
 c2.metric("SRI medio", f"{df['sri'].mean():.1f}")
-c3.metric("Gastos corrientes medios", f"{pd.to_numeric(df['gastos_corrientes_pct']).mean():.2f} %")
+c3.metric("Gastos corrientes medios", f"{df['gastos_corrientes_pct'].mean():.2f} %")
 
 columnas = ["isin", "nombre_producto", "nombre_clase", "gestora", "sri", "periodo_mantenimiento_anios",
             "gastos_corrientes_pct", "costes_entrada_pct", "costes_salida_pct", "fecha_documento", "url_pdf"]

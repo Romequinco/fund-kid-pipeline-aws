@@ -1172,3 +1172,8 @@ def test_peticion_se_adapta_a_lo_que_admite_cada_modelo():
     with pytest.raises(ValueError):
         peticion("KID", "eu.amazon.nova-2-lite-v1:0", "formato")
     assert peticion("KID", "otro.modelo")["toolConfig"]["tools"][0]["toolSpec"]["strict"] is True
+
+
+def test_api_devuelve_decimales_como_numero():
+    c, _ = cliente([{"isin": "ES0113900J37", "gastos_corrientes_pct": "1.910", "sri": 5}])
+    assert c.get("/fondos").json()[0]["gastos_corrientes_pct"] == 1.91
