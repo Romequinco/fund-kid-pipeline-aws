@@ -8,7 +8,7 @@
 ![AWS](https://img.shields.io/badge/AWS-S3%20·%20Bedrock%20·%20Aurora%20·%20Lambda%20·%20ECS-FF9900?logo=amazonwebservices&logoColor=white)
 ![Terraform](https://img.shields.io/badge/Terraform-IaC-7B42BC?logo=terraform&logoColor=white)
 ![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-OIDC-2088FF?logo=githubactions&logoColor=white)
-![Estado](https://img.shields.io/badge/estado-en%20curso-D9A400)
+![Estado](https://img.shields.io/badge/estado-desplegado-2F9E6E)
 
 Máster MIAX · Módulo Cloud · Práctica B7 · Noviembre 2026<br>
 Óscar Romero Quincoces · Fernando Dapena Tauste · Daniel García López
@@ -29,6 +29,24 @@ En AWS hay 68 KID de 3 gestoras, extraídos con Kimi K3.1 y con sus evidencias r
 - `/fondos/{isin}`.
 - `/resumen`.
 - `/health`.
+
+## Resumen
+
+| | Mínimo del enunciado | Esta solución |
+|---|---|---|
+| Fuentes y documentos | 2 y 15 | **3 gestoras y 68 KID** (Bestinver 41, Cobas 22, Azvalor 5), con origen y fecha de cada uno |
+| Extracción | Bedrock con salida estructurada | Kimi K3.1 con **herramienta estricta** y **evidencia literal por campo**: 170/170 campos correctos en 17 KID revisados a mano y 680/680 evidencias verificadas |
+| Base de datos | PostgreSQL sin duplicados | Aurora Serverless v2 con Data API; la identidad de cada documento es el SHA-256 del PDF |
+| API y aplicación | Una de cada | FastAPI en Lambda con Function URL y Streamlit en ECS Express, ambas públicas |
+| Infraestructura | Terraform y GitHub Actions | Dos raíces de Terraform, OIDC sin claves, despliegue y lote semanal desde Actions |
+
+**Ampliaciones del enunciado:**
+- Comparación de modelos: Kimi frente a Nova frente a reglas ([D-2.2](docs/DECISIONES.md)).
+- Precisión medida con KID revisados a mano ([D-2.5](docs/DECISIONES.md)).
+- 107 tests, ruff, `terraform validate` y construcción de imágenes en cada push.
+- Detección de KID nuevos, cambiados o desaparecidos en cada captura ([D-1.6](docs/DECISIONES.md)).
+
+Todas las decisiones, con su porqué y su evidencia, están en [`docs/DECISIONES.md`](docs/DECISIONES.md).
 
 ## El problema
 
@@ -66,17 +84,47 @@ aplicación.
 arquitectura, decisiones y despliegue, las URL de la aplicación y de la API y los nombres del grupo. Exposición en el
 taller 3 con demo en directo.
 
-## Arquitectura de referencia
+## Arquitectura
 
-| Capa | Referencia de los talleres | Alternativas válidas |
-|---|---|---|
-| Captura | Python con `requests` + BeautifulSoup | Scrapy, Playwright |
-| Almacenamiento | Amazon S3 | — |
-| Extracción | Bedrock (Converse API) con salidas estructuradas, script por lotes | Lambda disparada por S3, Step Functions |
-| Base de datos | Aurora PostgreSQL Serverless v2 con RDS Data API | RDS PostgreSQL, conexión por VPC |
-| API | FastAPI en Lambda con Function URL | API Gateway, contenedor en ECS |
-| Visualización | Streamlit en ECS Express Mode | Dash, React |
-| Despliegue | Terraform + GitHub Actions (OIDC, estado en S3) | Libre |
+```mermaid
+flowchart LR
+    subgraph web["Webs públicas"]
+        G["Bestinver · Azvalor · Cobas"]
+    end
+    subgraph gha["GitHub Actions (OIDC, sin claves)"]
+        CI["ci.yml<br>ruff · pytest · imágenes · terraform validate"]
+        DEP["deploy.yml · deploy<br>imágenes a ECR + terraform apply"]
+        LOTE["deploy.yml · lote<br>lunes 7:00 o a mano"]
+    end
+    subgraph aws["AWS eu-west-3 (Terraform)"]
+        S3[("S3 privado<br>kid/&lt;gestora&gt;/&lt;sha256&gt;.pdf<br>manifest/*.jsonl")]
+        BR["Bedrock<br>Kimi K3.1"]
+        DB[("Aurora PostgreSQL<br>Serverless v2 · Data API")]
+        API["Lambda + Function URL<br>FastAPI"]
+        APP["ECS Express<br>Streamlit"]
+    end
+    G -- "capture: robots.txt, pausa,<br>peticiones condicionales" --> S3
+    S3 -- "Markdown del KID (3 págs.)" --> BR
+    BR -- "extract: 10 campos + evidencias" --> DB
+    LOTE --> G
+    LOTE --> BR
+    DEP --> API & APP
+    DB --> API --> APP
+    U(("Usuario")) --> APP
+    U --> API
+```
+
+| Capa | Referencia de los talleres | Esta solución | Por qué |
+|---|---|---|---|
+| Captura | `requests` + BeautifulSoup | Igual, con robots.txt (RFC 9309), pausa por servidor, reintentos y peticiones condicionales | [D-1.1](docs/DECISIONES.md), [D-1.6](docs/DECISIONES.md) |
+| Almacenamiento | S3 por fecha | S3 por **SHA-256** del PDF, con manifiesto JSONL por ejecución | Idempotencia e histórico, [D-1.2](docs/DECISIONES.md) |
+| Texto | `pymupdf4llm` con OCR | `pymupdf4llm` sin OCR, **solo las 3 páginas del KID** | Los 68 tienen texto; Cobas añade un anexo, [D-2.3](docs/DECISIONES.md) |
+| Extracción | LangChain, `json_schema`, Kimi K3.1 | boto3 Converse, **herramienta estricta**, Kimi K3.1, con la alternativa `outputConfig` | [D-2.1](docs/DECISIONES.md), [D-2.2](docs/DECISIONES.md) |
+| Control de calidad | Evidencias por campo | Evidencias **verificadas** (aparecen y cuadran), reglas y 17 KID de referencia | [D-2.4](docs/DECISIONES.md), [D-2.5](docs/DECISIONES.md) |
+| Base de datos | Aurora Serverless v2 con Data API | Igual, con upsert por SHA-256 y vista `kid_vigente` | [D-3.1](docs/DECISIONES.md) |
+| API | FastAPI en Lambda con Function URL | Igual, con imagen de contenedor y Mangum | [D-4.2](docs/DECISIONES.md) |
+| Visualización | Streamlit en ECS Express | Igual; **solo lee de la API** | Regla 5 del enunciado, [D-4.1](docs/DECISIONES.md) |
+| Despliegue | Terraform + Actions (OIDC, estado en S3) | Dos raíces (bootstrap local y principal desde Actions), con interruptor de coste | [D-5.1](docs/DECISIONES.md), [D-5.2](docs/DECISIONES.md) |
 
 ## Estructura
 
@@ -108,14 +156,6 @@ documentación. La lógica vive en un único paquete y el resto son capas finas 
 │   ├── teoria/                 # síntesis del material de clase
 │   └── raw/                    # material de clase (local, no versionado)
 └── .github/workflows/          # ci.yml (ruff, pytest, imágenes, terraform validate) · deploy.yml (despliegue y lote)
-```
-
-## Flujo de datos
-
-```
-web de la gestora --capture--> S3 kid/<gestora>/<sha256>.pdf + manifest/*.jsonl + tabla documentos
-                  --extract--> Bedrock (salida estructurada) --> tabla kid (upsert por sha256)
-                                 vista kid_vigente --> API (Lambda) --> cuadro de mando (ECS)
 ```
 
 ## Puesta en marcha
@@ -201,6 +241,14 @@ Despliegue, en tres pasos:
    con OIDC no hay claves que guardar.
 3. **Push a `main`**: `deploy.yml` sube las imágenes y aplica `infra/`. Después, Actions > AWS > Run workflow con la
    fase `init-db` la primera vez y `capture-extract` a partir de ahí (también corre solo cada lunes).
+
+**El lote en GitHub Actions** (job `lote` de `deploy.yml`, cada lunes a las 7:00 o a mano desde Actions > AWS >
+Run workflow):
+- Entra en AWS por OIDC y lee de Terraform el bucket y la base de datos.
+- Ejecuta `capture`, que sube a S3 y a `documentos` solo lo nuevo o cambiado.
+- Ejecuta `extract`, que llama a Bedrock solo para los KID que aún no están extraídos.
+
+En un repositorio público, los minutos de Actions son gratis.
 
 Mientras no existan `AWS_ROLE_ARN` y `DESPLEGAR=true` (el interruptor de coste, D-5.2), `deploy.yml` no hace nada y solo
 corre la CI. El material
