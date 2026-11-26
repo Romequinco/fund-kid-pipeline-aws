@@ -6,6 +6,7 @@ Las cargas son idempotentes: `ON CONFLICT` sobre el SHA-256 del documento (D-1.2
 from __future__ import annotations
 
 import json
+import time
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -61,13 +62,28 @@ class BaseDatos:
     def __init__(self, rds_data, cluster_arn: str, secret_arn: str, database: str) -> None:
         self.rds, self.destino = rds_data, {"resourceArn": cluster_arn, "secretArn": secret_arn, "database": database}
 
+    def _llamar(self, **kw) -> dict:
+        """`execute_statement` con reintentos mientras Aurora despierta de la pausa automática (D-3.1).
+
+        Con `min_capacity = 0`, la primera consulta tras un rato sin uso recibe `DatabaseResumingException` durante
+        unos segundos. Se reintenta con espera creciente hasta ~30 s (el límite de la Lambda de la API es 60 s).
+        """
+        for espera in (1, 2, 3, 5, 8, 11, 0):
+            try:
+                return self.rds.execute_statement(**kw, **self.destino)
+            except Exception as e:  # botocore.errorfactory.DatabaseResumingException (cliente generado)
+                if type(e).__name__ != "DatabaseResumingException" or not espera:
+                    raise
+                time.sleep(espera)
+        raise AssertionError("inalcanzable")
+
     def ejecutar(self, sql: str, **valores) -> dict:
         params = [parametro(k, v) for k, v in valores.items()]
-        return self.rds.execute_statement(sql=sql, parameters=params, **self.destino)
+        return self._llamar(sql=sql, parameters=params)
 
     def consultar(self, sql: str, **valores) -> list[dict]:
         params = [parametro(k, v) for k, v in valores.items()]
-        r = self.rds.execute_statement(sql=sql, parameters=params, formatRecordsAs="JSON", **self.destino)
+        r = self._llamar(sql=sql, parameters=params, formatRecordsAs="JSON")
         return json.loads(r.get("formattedRecords", "[]"))
 
     def crear_esquema(self) -> None:

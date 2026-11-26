@@ -36,7 +36,7 @@ resource "aws_lambda_function" "api" {
   package_type  = "Image"
   image_uri     = "${aws_ecr_repository.api.repository_url}:${var.api_image_tag}"
   role          = aws_iam_role.api.arn
-  timeout       = 30 # Aurora puede tardar en despertar si estaba pausada
+  timeout       = 60 # Aurora tarda unos segundos en despertar de la pausa; db.py reintenta hasta ~30 s
   memory_size   = 512
 
   environment {
@@ -67,7 +67,8 @@ resource "aws_lambda_function_url" "api" {
   }
 }
 
-# Cuadro de mando: imagen en ECR -> ECS Express Mode (Fargate + balanceador HTTPS). Coste por hora (D-5.2).
+# Cuadro de mando en ECS Express Mode (Fargate + balanceador HTTPS): ALTERNATIVA APAGADA (D-4.3).
+# Cuesta ~2,7 $/día encendido, las 24 h. Se reactiva con la variable de repositorio DESPLEGAR_DASHBOARD=true.
 
 resource "aws_ecr_repository" "dashboard" {
   name         = "fund-kid-dashboard"
@@ -121,4 +122,115 @@ resource "aws_ecs_express_gateway_service" "dashboard" {
     aws_iam_role_policy_attachment.ecs_execution,
     aws_iam_role_policy_attachment.ecs_infrastructure,
   ]
+}
+
+# Solo se guardan las 3 últimas imágenes de cada repositorio: cada push añade cientos de MB (0,10 $/GB al mes)
+resource "aws_ecr_lifecycle_policy" "ultimas_3" {
+  for_each   = { api = aws_ecr_repository.api.name, dashboard = aws_ecr_repository.dashboard.name }
+  repository = each.value
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "Conservar las 3 imágenes más recientes"
+      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 3 }
+      action       = { type = "expire" }
+    }]
+  })
+}
+
+# --- Aplicación web en producción (D-4.3) ---
+# Streamlit en el navegador del usuario (stlite sobre Pyodide): index.html carga stlite y ejecuta src/dashboard.py, que
+# llama a la API. No hay servidor: un bucket privado y CloudFront delante, con HTTPS. Coste ~0 $ (capa gratuita).
+
+resource "aws_s3_bucket" "web" {
+  bucket = "fund-kid-${var.alias}-web"
+}
+
+resource "aws_s3_bucket_public_access_block" "web" {
+  bucket                  = aws_s3_bucket.web.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+locals {
+  web = {
+    "index.html"   = { origen = "${path.module}/../src/index.html", tipo = "text/html; charset=utf-8" }
+    "dashboard.py" = { origen = "${path.module}/../src/dashboard.py", tipo = "text/x-python; charset=utf-8" }
+  }
+}
+
+resource "aws_s3_object" "web" {
+  for_each     = local.web
+  bucket       = aws_s3_bucket.web.id
+  key          = each.key
+  source       = each.value.origen
+  etag         = filemd5(each.value.origen)
+  content_type = each.value.tipo
+}
+
+resource "aws_s3_object" "api_url" {
+  bucket       = aws_s3_bucket.web.id
+  key          = "api_url.txt"
+  content      = aws_lambda_function_url.api.function_url
+  content_type = "text/plain; charset=utf-8"
+}
+
+# Solo CloudFront puede leer el bucket (Origin Access Control): nadie entra directamente a S3
+resource "aws_cloudfront_origin_access_control" "web" {
+  name                              = "fund-kid-web"
+  origin_access_control_origin_type = "s3"
+  signing_behavior                  = "always"
+  signing_protocol                  = "sigv4"
+}
+
+data "aws_cloudfront_cache_policy" "sin_cache" {
+  name = "Managed-CachingDisabled" # son 3 ficheros pequeños: así cada despliegue se ve al instante
+}
+
+resource "aws_cloudfront_distribution" "web" {
+  enabled             = true
+  comment             = "Fund KID: aplicacion web (Streamlit en el navegador)"
+  default_root_object = "index.html"
+  price_class         = "PriceClass_100"
+
+  origin {
+    origin_id                = "web"
+    domain_name              = aws_s3_bucket.web.bucket_regional_domain_name
+    origin_access_control_id = aws_cloudfront_origin_access_control.web.id
+  }
+
+  default_cache_behavior {
+    target_origin_id       = "web"
+    viewer_protocol_policy = "redirect-to-https"
+    allowed_methods        = ["GET", "HEAD"]
+    cached_methods         = ["GET", "HEAD"]
+    cache_policy_id        = data.aws_cloudfront_cache_policy.sin_cache.id
+    compress               = true
+  }
+
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+
+  viewer_certificate {
+    cloudfront_default_certificate = true
+  }
+}
+
+resource "aws_s3_bucket_policy" "web" {
+  bucket = aws_s3_bucket.web.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "cloudfront.amazonaws.com" }
+      Action    = "s3:GetObject"
+      Resource  = "${aws_s3_bucket.web.arn}/*"
+      Condition = { StringEquals = { "AWS:SourceArn" = aws_cloudfront_distribution.web.arn } }
+    }]
+  })
 }

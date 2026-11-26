@@ -1177,3 +1177,57 @@ def test_peticion_se_adapta_a_lo_que_admite_cada_modelo():
 def test_api_devuelve_decimales_como_numero():
     c, _ = cliente([{"isin": "ES0113900J37", "gastos_corrientes_pct": "1.910", "sri": 5}])
     assert c.get("/fondos").json()[0]["gastos_corrientes_pct"] == 1.91
+
+
+def test_data_api_reintenta_mientras_aurora_despierta(monkeypatch):
+    import kid_pipeline.db as db_mod
+
+    class DatabaseResumingException(Exception):
+        pass
+
+    class RdsDormida:
+        def __init__(self):
+            self.intentos = 0
+
+        def execute_statement(self, **kw):
+            self.intentos += 1
+            if self.intentos < 3:
+                raise DatabaseResumingException("resuming")
+            return {"formattedRecords": "[{\"n\": 1}]"}
+
+    monkeypatch.setattr(db_mod.time, "sleep", lambda s: None)
+    rds = RdsDormida()
+    assert BaseDatos(rds, "c", "s", "kid").consultar("SELECT 1 AS n") == [{"n": 1}] and rds.intentos == 3
+
+    class RdsRota:
+        def execute_statement(self, **kw):
+            raise ValueError("otro error")
+
+    with pytest.raises(ValueError):
+        BaseDatos(RdsRota(), "c", "s", "kid").consultar("SELECT 1")
+
+
+def test_web_estatica_bien_cableada(tmp_path, monkeypatch):
+    """index.html (stlite) carga el mismo dashboard.py y la URL de la API que escribe Terraform (D-4.3)."""
+    import re as _re
+
+    html = (Path(__file__).with_name("index.html")).read_text(encoding="utf-8")
+    versiones = set(_re.findall(r"@stlite/browser@([\d.]+)/", html))
+    assert len(versiones) == 1 and all(p.isdigit() for p in versiones.pop().split("."))  # versión exacta y única
+    for fichero in ("dashboard.py", "api_url.txt"):
+        assert f'"{fichero}": {{ url: "./{fichero}" }}' in html
+    tf = (Path(__file__).parents[1] / "infra" / "servicios.tf").read_text(encoding="utf-8")
+    assert '"index.html"' in tf and '"dashboard.py"' in tf and 'key          = "api_url.txt"' in tf
+
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("dash", Path(__file__).with_name("dashboard.py"))
+    codigo = spec.loader.get_source("dash")
+    espacio = {}
+    exec(codigo.split("API_URL = url_api()")[0], espacio)  # solo la función, sin arrancar Streamlit
+    monkeypatch.delenv("API_URL", raising=False)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "api_url.txt").write_text("https://api.ejemplo/\n", encoding="utf-8")
+    assert espacio["url_api"]() == "https://api.ejemplo"
+    monkeypatch.setenv("API_URL", "https://otra/")
+    assert espacio["url_api"]() == "https://otra"

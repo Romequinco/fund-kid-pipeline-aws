@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+  <title>Fund KID</title>
+  <!-- Streamlit en el navegador (stlite sobre Pyodide): sin servidor, servido desde S3 y CloudFront (D-4.3) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/browser@1.12.1/build/stlite.css" />
+  <style>
+    body { margin: 0; background: #ffffff; font-family: system-ui, sans-serif; }
+    #cargando { padding: 2rem; color: #444; }
+  </style>
+</head>
+<body>
+  <div id="root"><p id="cargando">Cargando la aplicación (la primera vez tarda unos segundos)…</p></div>
+  <script type="module">
+    import { mount } from "https://cdn.jsdelivr.net/npm/@stlite/browser@1.12.1/build/stlite.js";
+    mount(
+      {
+        requirements: ["pandas", "requests"],
+        entrypoint: "dashboard.py",
+        files: {
+          "dashboard.py": { url: "./dashboard.py" },
+          "api_url.txt": { url: "./api_url.txt" },
+        },
+      },
+      document.getElementById("root"),
+    );
+  </script>
+</body>
+</html>

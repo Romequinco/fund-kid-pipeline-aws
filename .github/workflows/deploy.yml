@@ -4,6 +4,7 @@
 # Variables del repositorio (Settings > Variables > Actions), salidas de infra/bootstrap:
 #   AWS_ROLE_ARN, AWS_REGION, TF_STATE_BUCKET, ALIAS y BEDROCK_MODEL_ID.
 # Interruptor de coste (D-5.2): no se despliega ni corre el lote hasta que exista la variable DESPLEGAR=true.
+# La aplicación web va en S3 + CloudFront; el cuadro de mando en ECS Express solo con DESPLEGAR_DASHBOARD=true (D-4.3).
 name: AWS
 
 on:
@@ -32,6 +33,7 @@ env:
   TF_VAR_bedrock_model_id: ${{ vars.BEDROCK_MODEL_ID }}
   TF_VAR_api_image_tag: ${{ github.sha }}
   TF_VAR_dashboard_image_tag: ${{ github.sha }}
+  TF_VAR_desplegar_dashboard: ${{ vars.DESPLEGAR_DASHBOARD == 'true' }}
   FASE: ${{ inputs.fase || (github.event_name == 'schedule' && 'capture-extract') || 'deploy' }}
 
 jobs:
@@ -60,7 +62,9 @@ jobs:
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
-          for img in api dashboard; do
+          imagenes="api"
+          if [ "$TF_VAR_desplegar_dashboard" = "true" ]; then imagenes="api dashboard"; fi
+          for img in $imagenes; do
             docker build --platform linux/amd64 --provenance=false -f "infra/$img.Dockerfile" \
               -t "$REGISTRY/fund-kid-$img:$GITHUB_SHA" .
             docker push "$REGISTRY/fund-kid-$img:$GITHUB_SHA"

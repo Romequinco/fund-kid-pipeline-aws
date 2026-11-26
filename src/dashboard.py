@@ -1,14 +1,29 @@
-"""Cuadro de mando de los KID. Streamlit en ECS Express Mode que solo lee de la API (D-4.1)."""
+"""Cuadro de mando de los KID. Solo lee de la API (D-4.1).
+
+El mismo código sirve en los dos despliegues (D-4.3):
+- En producción, en el navegador del usuario con stlite (Streamlit sobre Pyodide), servido desde S3 y CloudFront
+  (`src/index.html`). La URL de la API llega en `api_url.txt`, que escribe Terraform.
+- Como alternativa apagada, en un contenedor de ECS Express. La URL llega en la variable de entorno `API_URL`.
+"""
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pandas as pd
 import requests
 import streamlit as st
 
-API_URL = os.environ.get("API_URL", "http://localhost:8000").rstrip("/")
+
+def url_api() -> str:
+    if os.environ.get("API_URL"):
+        return os.environ["API_URL"].rstrip("/")
+    fichero = Path("api_url.txt")
+    return fichero.read_text(encoding="utf-8").strip().rstrip("/") if fichero.exists() else "http://localhost:8000"
+
+
+API_URL = url_api()
 
 st.set_page_config(page_title="Fund KID", layout="wide")
 
@@ -28,7 +43,11 @@ with st.sidebar:
     gestora = st.selectbox("Gestora", ["Todas", "bestinver", "azvalor", "cobas"])
 
 filtros = {"sri_min": sri[0], "sri_max": sri[1]} | ({} if gestora == "Todas" else {"gestora": gestora})
-df = pd.DataFrame(get("/fondos", **filtros))
+try:
+    df = pd.DataFrame(get("/fondos", **filtros))
+except requests.RequestException:
+    st.warning("La base de datos se está despertando (se pausa sola cuando no se usa). Recarga en unos segundos.")
+    st.stop()
 for col in ("sri", "periodo_mantenimiento_anios", "gastos_corrientes_pct", "costes_entrada_pct", "costes_salida_pct"):
     if col in df:
         df[col] = pd.to_numeric(df[col], errors="coerce")  # por si la API devuelve decimales como texto

@@ -54,9 +54,9 @@ variable "dashboard_image_tag" {
 }
 
 variable "desplegar_dashboard" {
-  description = "ECS Express cobra por hora: se enciende para pruebas y la exposición (D-5.2)."
+  description = "Alternativa apagada: el cuadro de mando en ECS Express (~80 $/mes). En producción va en S3 + CloudFront (D-4.3)."
   type        = bool
-  default     = true
+  default     = false
 }
 
 # --- Salidas (las lee el job del lote con `terraform output`) ---
@@ -79,6 +79,11 @@ output "db_name" {
 
 output "api_url" {
   value = aws_lambda_function_url.api.function_url
+}
+
+output "web_url" {
+  description = "Aplicación web en producción: Streamlit en el navegador (stlite) servido por CloudFront (D-4.3)."
+  value       = "https://${aws_cloudfront_distribution.web.domain_name}"
 }
 
 output "bedrock_model_id" {

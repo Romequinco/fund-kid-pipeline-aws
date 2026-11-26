@@ -5,7 +5,7 @@
 **Del KID en PDF al cuadro de mando: pipeline de datos de fondos de inversión en AWS con IA generativa**
 
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
-![AWS](https://img.shields.io/badge/AWS-S3%20·%20Bedrock%20·%20Aurora%20·%20Lambda%20·%20ECS-FF9900?logo=amazonwebservices&logoColor=white)
+![AWS](https://img.shields.io/badge/AWS-S3%20·%20Bedrock%20·%20Aurora%20·%20Lambda%20·%20CloudFront-FF9900?logo=amazonwebservices&logoColor=white)
 ![Terraform](https://img.shields.io/badge/Terraform-IaC-7B42BC?logo=terraform&logoColor=white)
 ![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-OIDC-2088FF?logo=githubactions&logoColor=white)
 ![Estado](https://img.shields.io/badge/estado-desplegado-2F9E6E)
@@ -21,7 +21,7 @@ Máster MIAX · Módulo Cloud · Práctica B7 · Noviembre 2026<br>
 
 | | URL |
 |---|---|
-| Aplicación (Streamlit en ECS Express) | https://fu-b5912052f4d5431d888307181360b5b0.ecs.eu-west-3.on.aws |
+| Aplicación (Streamlit en el navegador, S3 + CloudFront) | WEB_URL |
 | API (FastAPI en Lambda) | https://mozsktwrxdyadipvsc3vsvaxni0hawvo.lambda-url.eu-west-3.on.aws/docs |
 
 En AWS hay 68 KID de 3 gestoras, extraídos con Kimi K3.1 y con sus evidencias revisadas. Rutas de la API:
@@ -37,7 +37,7 @@ En AWS hay 68 KID de 3 gestoras, extraídos con Kimi K3.1 y con sus evidencias r
 | Fuentes y documentos | 2 y 15 | **3 gestoras y 68 KID** (Bestinver 41, Cobas 22, Azvalor 5), con origen y fecha de cada uno |
 | Extracción | Bedrock con salida estructurada | Kimi K3.1 con **herramienta estricta** y **evidencia literal por campo**: 170/170 campos correctos en 17 KID revisados a mano y 680/680 evidencias verificadas |
 | Base de datos | PostgreSQL sin duplicados | Aurora Serverless v2 con Data API; la identidad de cada documento es el SHA-256 del PDF |
-| API y aplicación | Una de cada | FastAPI en Lambda con Function URL y Streamlit en ECS Express, ambas públicas |
+| API y aplicación | Una de cada | FastAPI en Lambda con Function URL y Streamlit ejecutado en el navegador (stlite) desde S3 + CloudFront, ambas públicas y por ~0 $ al mes ([D-4.3](docs/DECISIONES.md)) |
 | Infraestructura | Terraform y GitHub Actions | Dos raíces de Terraform, OIDC sin claves, despliegue y lote semanal desde Actions |
 
 **Ampliaciones del enunciado:**
@@ -101,17 +101,17 @@ flowchart LR
         BR["Bedrock<br>Kimi K3.1"]
         DB[("Aurora PostgreSQL<br>Serverless v2 · Data API")]
         API["Lambda + Function URL<br>FastAPI"]
-        APP["ECS Express<br>Streamlit"]
+        WEB["S3 privado + CloudFront<br>index.html + dashboard.py"]
     end
     G -- "capture: robots.txt, pausa,<br>peticiones condicionales" --> S3
     S3 -- "Markdown del KID (3 págs.)" --> BR
     BR -- "extract: 10 campos + evidencias" --> DB
     LOTE --> G
     LOTE --> BR
-    DEP --> API & APP
-    DB --> API --> APP
-    U(("Usuario")) --> APP
-    U --> API
+    DEP --> API & WEB
+    DB --> API
+    U(("Usuario")) -- "HTTPS" --> WEB
+    WEB -. "Streamlit (stlite) corre en el navegador<br>y llama a la API" .-> API
 ```
 
 | Capa | Referencia de los talleres | Esta solución | Por qué |
@@ -123,7 +123,7 @@ flowchart LR
 | Control de calidad | Evidencias por campo | Evidencias **verificadas** (aparecen y cuadran), reglas y 17 KID de referencia | [D-2.4](docs/DECISIONES.md), [D-2.5](docs/DECISIONES.md) |
 | Base de datos | Aurora Serverless v2 con Data API | Igual, con upsert por SHA-256 y vista `kid_vigente` | [D-3.1](docs/DECISIONES.md) |
 | API | FastAPI en Lambda con Function URL | Igual, con imagen de contenedor y Mangum | [D-4.2](docs/DECISIONES.md) |
-| Visualización | Streamlit en ECS Express | Igual; **solo lee de la API** | Regla 5 del enunciado, [D-4.1](docs/DECISIONES.md) |
+| Visualización | Streamlit en ECS Express | El mismo Streamlit, **ejecutado en el navegador** (stlite) desde S3 + CloudFront: ~0 $ frente a ~80 $ al mes. ECS Express queda como alternativa apagada | [D-4.1](docs/DECISIONES.md), [D-4.3](docs/DECISIONES.md) |
 | Despliegue | Terraform + Actions (OIDC, estado en S3) | Dos raíces (bootstrap local y principal desde Actions), con interruptor de coste | [D-5.1](docs/DECISIONES.md), [D-5.2](docs/DECISIONES.md) |
 
 ## Estructura
@@ -145,7 +145,8 @@ documentación. La lógica vive en un único paquete y el resto son capas finas 
 │   │   └── __init__.py         # Config por variables de entorno
 │   ├── pipeline.py             # lote: init-db | capture | extract
 │   ├── api.py                  # FastAPI + Mangum en Lambda con Function URL
-│   ├── dashboard.py            # Streamlit en ECS Express Mode; solo lee de la API
+│   ├── dashboard.py            # Streamlit (en el navegador con stlite, o en ECS Express); solo lee de la API
+│   ├── index.html              # la web: carga stlite y monta dashboard.py (S3 + CloudFront)
 │   └── test_pipeline.py        # tests sin AWS (clientes falsos)
 ├── infra/                      # todo el despliegue
 │   ├── main.tf  datos.tf  servicios.tf   # proveedor y variables · S3 y Aurora · Lambda, ECR y ECS Express
@@ -290,6 +291,7 @@ de clase no se versiona: quien lo necesite lo copia en `docs/raw/`.
 
 ## Estado
 
+- [x] Aplicación a ~0 $: Streamlit en el navegador (stlite) en S3 + CloudFront; ECS Express apagado como alternativa
 - [x] Repositorio y material de clase (local, en `docs/raw/`, no versionado)
 - [x] Mini base: carpetas por fase y decisiones iniciales
 - [x] Estructura completa y compacta: paquete común, API, cuadro de mando, Terraform, workflows y tests

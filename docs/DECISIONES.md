@@ -318,6 +318,53 @@ un correlativo. El estado es `ABIERTA` o `CERRADA`. Las decisiones se añaden al
   capa más que explicar.
 - **Estado:** CERRADA (se revisa si el Taller 2 usa otra opción)
 
+### D-4.3 · La aplicación se ejecuta en el navegador: Streamlit con stlite en S3 + CloudFront
+
+- **Fecha:** 2026-11-26
+- **Contexto:** la referencia del enunciado es Streamlit en ECS Express, y así se desplegó primero (D-5.1). Medido con
+  los precios de París, ECS Express cobra las 24 horas, entre o no alguien:
+
+  | Pieza | Al día |
+  |---|---:|
+  | Fargate (1 vCPU y 2 GB) | ~1,40 $ |
+  | Balanceador HTTPS | ~0,80 $ |
+  | 4 IP públicas | 0,48 $ |
+  | **Total** | **~2,7 $** (~80 $ al mes) |
+
+  El presupuesto del grupo es de 14 $ al mes.
+- **Alternativas** (al mes, precios de París del 26/11/2026):
+
+  | Opción | Coste | Siempre encendida |
+  |---|---:|:---:|
+  | ECS Express | ~80 $ | Sí |
+  | EC2 `t4g.micro` + CloudFront | ~11 $ | Sí |
+  | EC2 `t4g.nano` + CloudFront | ~8 $, con 0,5 GB de memoria justa | Sí |
+  | Web estática en HTML/JS | ~0 $, pero reescribiendo la aplicación | Sí |
+  | **Streamlit en el navegador (stlite) en S3 + CloudFront** | **~0 $** | **Sí** |
+  | Streamlit Community Cloud | 0 $ | Sí |
+
+  Community Cloud queda fuera de AWS y de Terraform, que el enunciado exige.
+- **Decisión:** stlite. Ejecuta Streamlit sobre Pyodide (Python en WebAssembly) en el navegador del usuario.
+  - **Mismo código:** `src/index.html` carga stlite (versión fija 1.12.1) y monta **el mismo `src/dashboard.py`**.
+  - **URL de la API:** llega en `api_url.txt`, que escribe Terraform.
+  - **Alojamiento:** bucket privado; CloudFront lo sirve con HTTPS y es el único que puede leerlo (Origin Access
+    Control).
+  - **Regla 5:** se sigue cumpliendo. El navegador solo habla con la API, y la base de datos y el bucket de documentos
+    siguen privados.
+  - **Coste:** ~0 $. CloudFront entra en su capa gratuita permanente.
+- **Coste asumido:**
+  - **Primera carga:** tarda unos segundos, porque el navegador descarga Pyodide (unos 20 MB, que luego quedan en
+    caché).
+  - **Limitaciones de stlite:** solo admite librerías disponibles en Pyodide; pandas y requests lo están.
+  - **Aurora:** la primera consulta tras la pausa automática puede tardar. La API reintenta mientras despierta (D-3.1)
+    y la aplicación muestra un aviso si aun así falla.
+- **Evidencia:** probado en local contra la API real: 68 clases, la tabla y el gráfico, sin servidor.
+- **ECS Express sigue en el código como alternativa apagada.** Se conservan `infra/dashboard.Dockerfile`, el recurso
+  `aws_ecs_express_gateway_service` con `count` y sus roles. Para reactivarlo, se pone la variable de repositorio
+  `DESPLEGAR_DASHBOARD=true` y se despliega: el workflow construye su imagen y Terraform crea el servicio (unos 15
+  minutos la primera vez). El mismo `dashboard.py` lee entonces la URL de la variable de entorno `API_URL`.
+- **Estado:** CERRADA
+
 ---
 
 ### D-5.1 · Terraform en dos raíces
@@ -342,6 +389,8 @@ un correlativo. El estado es `ABIERTA` o `CERRADA`. Las decisiones se añaden al
   no se pausa.
 - **Alternativas:** desplegar solo para las pruebas y la exposición, y apagarlo con `terraform destroy` el resto del
   tiempo, o mover la aplicación a una opción sin coste fijo.
+- **Cambio (26/11/2026):** el cuadro de mando de ECS Express queda apagado y la aplicación pasa a S3 + CloudFront (D-4.3).
+  El proyecto completo cuesta así ~1-2 $ al mes.
 - **Primer despliegue (26/11/2026):** 19 recursos. El cuadro de mando tardó unos 15 minutos en responder la primera
   vez, mientras se creaban el balanceador y el certificado HTTPS. `DESPLEGAR=true` está activado: cada push que toque
   `src/`, `infra/` o `pyproject.toml` vuelve a desplegar. Para dejar de pagar el cuadro de mando sin borrar los datos:
