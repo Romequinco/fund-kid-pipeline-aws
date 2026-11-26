@@ -21,7 +21,9 @@ un correlativo. El estado es `ABIERTA` o `CERRADA`. Las decisiones se añaden al
   accede a muchos con perfiles de inferencia entre regiones (`eu.`).
 - **Alternativas:** `eu-west-3`, `eu-north-1` o `eu-central-1`, según qué modelo de Bedrock quede disponible con salidas
   estructuradas.
-- **Estado:** ABIERTA (se cierra al elegir el modelo, D-2.2)
+- **Decisión (2026-11-26):** `eu-west-3` (París). Es la del curso y la de la solución de referencia, el modelo elegido
+  (D-2.2) funciona desde ahí, y el bootstrap (bucket del estado, OIDC y rol de GitHub) ya está creado en ella.
+- **Estado:** CERRADA
 
 ### D-0.3 · Un paquete común como única fuente de verdad
 
@@ -186,7 +188,31 @@ un correlativo. El estado es `ABIERTA` o `CERRADA`. Las decisiones se añaden al
   que París sirve como región (D-0.2).
 - **Cómo se elige:** `pipeline.py evaluar --predicciones data/extraccion/<modelo>.jsonl` compara cada candidato con la
   referencia y con las reglas, sin volver a llamar a Bedrock.
-- **Estado:** ABIERTA
+- **Qué permite la cuenta del máster** (probado en `eu-west-3` el 26/11/2026):
+  - Bloqueados ("not available for this account"): Anthropic, OpenAI, xAI y Z.AI. Se contratan por AWS Marketplace,
+    que la cuenta no permite.
+  - Nova (Amazon) y Mistral: responden, pero no admiten `strict` ni `outputConfig`. Solo tienen herramienta sin modo
+    estricto, que no cumple la regla 5 del enunciado.
+  - **Kimi K3.1 (Moonshot):** admite la herramienta estricta y `outputConfig`, pero no `temperature`.
+    `extract.LIMITACIONES` lo recoge.
+- **Evidencia** (los 68 KID; los 17 de referencia, D-2.5):
+
+  | | Kimi K3.1 (`global.`) | Nova 2 Lite (`eu.`, sin modo estricto) | Reglas |
+  |---|---|---|---|
+  | Exactitud en la referencia | **170/170** | 159/170 (un SRI 7 en lugar de 5 y un KID vacío) | 170/170 |
+  | Evidencias que aparecen y cuadran | **680/680** | 443/670 | — |
+  | ISIN y clase frente al manifiesto | 68/68 y 47/47 | 58/67 (9 KID sin datos) y 38/46 | 68/68 y 47/47 |
+  | Fallos | 0 | 1 (respuesta en bucle, cortada por `maxTokens`) | 0 |
+  | Tiempo medio por KID | 7,4 s | 4,0 s | < 0,1 s |
+  | Coste aproximado de los 68 KID | ~3,5 $ (6,5 mil tokens de entrada y ~1,9 mil de salida por KID) | céntimos | 0 |
+
+- **Decisión (2026-11-26):** **Kimi K3.1** (`global.moonshotai.kimi-k3.1`), el modelo de la solución de referencia.
+  Es el único de la cuenta que cumple la regla 5, y acierta todo con sus evidencias. Que Kimi, las reglas y la
+  referencia anotada a mano coincidan en los 170 campos, siendo tres fuentes independientes, refuerza también la
+  referencia.
+- **Coste asumido:** el perfil `global.` puede procesar los datos fuera de la UE. Son documentos públicos, así que es
+  aceptable, pero un modelo con perfil `eu.` lo evitaría si la cuenta lo permitiera.
+- **Estado:** CERRADA
 
 ### D-2.3 · El modelo lee el Markdown de las páginas del KID
 
@@ -256,7 +282,8 @@ un correlativo. El estado es `ABIERTA` o `CERRADA`. Las decisiones se añaden al
   - La salida de Azvalor: 0 % en el cuadro, 3 % en el texto para menos de un año.
   - La salida de Cobas: 4 % para menos de un año.
   - Las comisiones temporales de los Bonos Institucional.
-- **Estado:** ABIERTA (se cierra al confirmar la referencia y evaluar el modelo de D-2.2)
+- **Modelos (26/11/2026):** Kimi K3.1 también acierta 170/170 y Nova 2 Lite 159/170 (tabla en D-2.2).
+- **Estado:** ABIERTA (se cierra cuando el grupo confirme la referencia)
 
 ---
 
@@ -305,7 +332,9 @@ un correlativo. El estado es `ABIERTA` o `CERRADA`. Las decisiones se añaden al
 - **Contexto:** ECS Express cuesta del orden de 2-3 $ al día (curso, lección 17), y Aurora cobra por capacidad mientras
   no se pausa.
 - **Alternativas:** desplegar solo para las pruebas y la exposición, y apagarlo con `terraform destroy` el resto del
-  tiempo, o mover la aplicación a una opción sin coste fijo. La variable `desplegar_dashboard` permite apagar solo el
+  tiempo, o mover la aplicación a una opción sin coste fijo.
+- **Interruptor (2026-11-26):** `deploy.yml` no despliega ni corre el lote hasta que exista la variable de repositorio
+  `DESPLEGAR=true`. Con el rol de GitHub ya creado, cualquier push a `main` desplegaría si no. La variable `desplegar_dashboard` permite apagar solo el
   cuadro de mando, y Aurora se pausa sola a los 10 minutos sin uso (`min_capacity = 0`).
 - **Estado:** ABIERTA
 

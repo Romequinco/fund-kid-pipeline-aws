@@ -12,7 +12,8 @@ dependencies = [
 [project.optional-dependencies]
 api = ["fastapi>=0.115", "mangum>=0.19"]           # imagen de Lambda
 dashboard = ["streamlit>=1.40", "pandas>=2.2"]      # imagen de ECS Express
-dev = ["kid-pipeline[api,dashboard]", "pytest>=8", "httpx>=0.27", "ruff>=0.6"]
+dev = ["kid-pipeline[api,dashboard]", "pytest>=8", "httpx>=0.27", "ruff>=0.6",
+       "botocore[crt]"]  # credenciales de `aws login` en local; en AWS se usan roles
 
 [build-system]
 requires = ["setuptools>=70"]

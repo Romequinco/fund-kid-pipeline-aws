@@ -6,6 +6,7 @@
     python src/pipeline.py evaluar [--predicciones data/extraccion/x.jsonl] reglas o modelo frente a la referencia
     python src/pipeline.py init-db                                         crea tablas y vista
     python src/pipeline.py capture [--gestora cobas]                       web -> S3 + manifiesto + tabla documentos
+    python src/pipeline.py extract --local --modelo <id> [--limite N]   data/markdown -> Bedrock -> data/extraccion/
     python src/pipeline.py extract [--todos]                               S3 -> Bedrock -> tabla kid
 """
 
@@ -265,6 +266,52 @@ def kids_locales(raiz: Path) -> list[tuple[dict, str]]:
             for r in vigentes(leer_manifiestos_local(raiz)) if ruta_markdown(raiz, r).exists()]
 
 
+def archivo_extraccion(raiz: Path, modelo: str) -> Path:
+    """data/extraccion/<modelo>.jsonl: lo que lee `evaluar --predicciones` para comparar modelos (D-2.5)."""
+    return raiz / "extraccion" / (re.sub(r"[^A-Za-z0-9._-]+", "_", modelo) + ".jsonl")
+
+
+def extract_local(raiz: Path, modelo: str, mecanismo: str = "herramienta", limite: int | None = None,
+                  region: str = "eu-west-3") -> dict:
+    """Extrae con Bedrock los KID vigentes ya convertidos a Markdown y los añade al JSONL del modelo.
+
+    Retoma donde lo dejó: los documentos que ya están en el JSONL no se vuelven a pedir (ni a pagar).
+    """
+    import time
+
+    import boto3
+    from botocore.config import Config as BotoConfig
+
+    from kid_pipeline.extract import extraer, revisar
+
+    # Margen para la primera compilación del esquema estricto (hasta ~90 s) y reintentos ante límites de cuota
+    bedrock = boto3.client("bedrock-runtime", region_name=region,
+                           config=BotoConfig(read_timeout=300, retries={"max_attempts": 6, "mode": "adaptive"}))
+    destino = archivo_extraccion(raiz, modelo)
+    hechos = set(leer_predicciones(destino)) if destino.exists() else set()
+    pendientes = [(r, md) for r, md in kids_locales(raiz) if r["sha256"] not in hechos][:limite]
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    ok, fallos = 0, []
+    for r, md in pendientes:
+        inicio = time.monotonic()
+        try:
+            kid = extraer(bedrock, md, modelo, mecanismo)
+        except Exception as e:  # un KID que falla no para el resto; se reintenta en la próxima ejecución
+            fallos.append(f"{r['sha256'][:12]} ({r['gestora']}): {type(e).__name__}: {e}")
+            log.warning("%s", fallos[-1])
+            continue
+        revision = revisar(kid, md)
+        fila = {"sha256": r["sha256"], "gestora": r["gestora"], **kid.valores(), "modelo": modelo,
+                "mecanismo": mecanismo, "segundos": round(time.monotonic() - inicio, 1),
+                "evidencias_ok": sum(v["aparece"] and v["coherente"] for v in revision.values()),
+                "revision": revision}
+        with destino.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(fila, ensure_ascii=False, default=str) + "\n")
+        ok += 1
+        log.info("%s %s -> %s (%.1f s)", r["gestora"], r["sha256"][:12], kid.isin, fila["segundos"])
+    return {"modelo": modelo, "extraidos": ok, "ya_estaban": len(hechos), "fallos": fallos, "destino": str(destino)}
+
+
 def extract(todos: bool) -> None:
     import boto3
 
@@ -520,6 +567,11 @@ def main() -> int:
     m.add_argument("--sobrescribir", action="store_true", help="vuelve a convertir lo ya convertido")
     e = sub.add_parser("extract")
     e.add_argument("--todos", action="store_true", help="reprocesa también lo ya extraído")
+    e.add_argument("--local", nargs="?", const=RAIZ_LOCAL, type=Path,
+                   help="extrae el Markdown de data/ a data/extraccion/<modelo>.jsonl, sin S3 ni base de datos")
+    e.add_argument("--modelo", help="ID del modelo o perfil de inferencia de Bedrock (defecto: BEDROCK_MODEL_ID)")
+    e.add_argument("--mecanismo", choices=["herramienta", "formato"], default="herramienta", help="D-2.1")
+    e.add_argument("--limite", type=int, help="como mucho N documentos (para probar)")
     ev = sub.add_parser("evaluar")
     ev.add_argument("--local", nargs="?", default=RAIZ_LOCAL, const=RAIZ_LOCAL, type=Path)
     ev.add_argument("--referencia", type=Path, help="defecto <local>/referencia.json")
@@ -555,6 +607,17 @@ def main() -> int:
         return 1 if r["fallos"] else 0
     elif args.fase == "evaluar":
         imprimir_evaluacion(evaluar(args.local, args.referencia, args.predicciones, args.guardar))
+    elif args.local is not None:
+        cfg = Config.desde_entorno()
+        modelo = args.modelo or cfg.modelo_bedrock
+        if not modelo:
+            p.error("falta --modelo (o la variable de entorno BEDROCK_MODEL_ID)")
+        r = extract_local(args.local, modelo, args.mecanismo, args.limite, cfg.region)
+        print(f"{r['modelo']}: {r['extraidos']} extraídos, {r['ya_estaban']} ya estaban, {len(r['fallos'])} fallos "
+              f"-> {r['destino']}")
+        for f in r["fallos"]:
+            print("FALLO:", f)
+        return 1 if r["fallos"] else 0
     else:
         extract(args.todos)
     return 0

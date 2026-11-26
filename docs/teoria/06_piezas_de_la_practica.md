@@ -316,6 +316,9 @@ Los nombres de parámetros del ejemplo son los de la referencia de la API; que e
   0 opcionales y 10 uniones ([D-2.1](../DECISIONES.md), [D-2.4](../DECISIONES.md)).
 - **Control de calidad:** cada evidencia debe aparecer en el Markdown y cuadrar con su valor. Un extractor por reglas y
   17 KID revisados a mano permiten medir cualquier modelo con `pipeline.py evaluar` ([D-2.5](../DECISIONES.md)).
+- **Con Bedrock real (26/11/2026):** en la cuenta del máster solo Kimi K3.1 admite salida estructurada estricta.
+  Anthropic, OpenAI, xAI y Z.AI están bloqueados (Marketplace), y Nova y Mistral no admiten `strict` ni `outputConfig`.
+  Kimi no acepta `temperature`. Acierta 170 de 170 campos con 680 de 680 evidencias correctas ([D-2.2](../DECISIONES.md)).
 
 ## 5. Aurora PostgreSQL Serverless v2 con RDS Data API
 

@@ -1130,3 +1130,45 @@ def test_coherencia_manifiesto_y_predicciones_jsonl(tmp_path):
 def test_api_devuelve_las_evidencias_como_objeto():
     c, _ = cliente([{"isin": "ES0113900J37", "evidencias": '{"sri": {"evidencia": "riesgo 4", "aparece": true}}'}])
     assert c.get("/fondos").json()[0]["evidencias"]["sri"]["aparece"] is True
+
+
+def test_extract_local_escribe_el_jsonl_y_retoma(tmp_path, monkeypatch):
+    import boto3
+    import pymupdf
+
+    from kid_pipeline.extract import HERRAMIENTA as H
+
+    doc = pymupdf.open()
+    doc.new_page().insert_text((72, 72), "Documento de datos fundamentales ISIN: ES0112611001")
+    momento = datetime(2026, 11, 19, 10, 0, tzinfo=UTC)
+    d = Documento(KidEnlace("azvalor", "https://a.es/k.pdf", "https://a.es/f"), doc.tobytes(), momento)
+    guardar_local(tmp_path, d)
+    escribir_manifiesto_local(tmp_path, momento, [linea_manifiesto(d)])
+    pipeline.markdown_local(tmp_path)
+    llamadas = []
+
+    class BedrockFalso:
+        def converse(self, **kw):
+            llamadas.append(kw["modelId"])
+            entrada = {"isin_evidencia": "ISIN: ES0112611001", "isin": "ES0112611001"}
+            return {"stopReason": "tool_use", "output": {"message": {"content": [
+                {"toolUse": {"name": H, "input": entrada}}]}}}
+
+    monkeypatch.setattr(boto3, "client", lambda *a, **k: BedrockFalso())
+    r = pipeline.extract_local(tmp_path, "global.modelo:1")
+    assert (r["extraidos"], r["fallos"], llamadas) == (1, [], ["global.modelo:1"])
+    [fila] = pipeline.leer_predicciones(pipeline.archivo_extraccion(tmp_path, "global.modelo:1")).values()
+    assert fila["isin"] == "ES0112611001" and fila["revision"]["isin"]["aparece"]
+    assert pipeline.extract_local(tmp_path, "global.modelo:1")["ya_estaban"] == 1 and len(llamadas) == 1
+
+
+def test_peticion_se_adapta_a_lo_que_admite_cada_modelo():
+    from kid_pipeline.extract import peticion
+
+    kimi = peticion("KID", "global.moonshotai.kimi-k3.1")
+    assert "temperature" not in kimi["inferenceConfig"] and kimi["toolConfig"]["tools"][0]["toolSpec"]["strict"]
+    nova = peticion("KID", "eu.amazon.nova-2-lite-v1:0")
+    assert nova["inferenceConfig"]["temperature"] == 0 and "strict" not in nova["toolConfig"]["tools"][0]["toolSpec"]
+    with pytest.raises(ValueError):
+        peticion("KID", "eu.amazon.nova-2-lite-v1:0", "formato")
+    assert peticion("KID", "otro.modelo")["toolConfig"]["tools"][0]["toolSpec"]["strict"] is True

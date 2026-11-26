@@ -2,7 +2,8 @@
 #   deploy: en cada push a main (o a mano con fase=deploy) sube las imágenes y aplica infra/.
 #   lote:   cada lunes (o a mano con otra fase) ejecuta src/pipeline.py.
 # Variables del repositorio (Settings > Variables > Actions), salidas de infra/bootstrap:
-#   AWS_ROLE_ARN, AWS_REGION, TF_STATE_BUCKET, ALIAS y BEDROCK_MODEL_ID. Sin ellas no se hace nada.
+#   AWS_ROLE_ARN, AWS_REGION, TF_STATE_BUCKET, ALIAS y BEDROCK_MODEL_ID.
+# Interruptor de coste (D-5.2): no se despliega ni corre el lote hasta que exista la variable DESPLEGAR=true.
 name: AWS
 
 on:
@@ -35,7 +36,7 @@ env:
 
 jobs:
   deploy:
-    if: vars.AWS_ROLE_ARN != '' && (github.event_name == 'push' || inputs.fase == 'deploy')
+    if: vars.AWS_ROLE_ARN != '' && vars.DESPLEGAR == 'true' && (github.event_name == 'push' || inputs.fase == 'deploy')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -68,7 +69,7 @@ jobs:
       - run: echo "API -> $(terraform -chdir=infra output -raw api_url)" >> "$GITHUB_STEP_SUMMARY"
 
   lote:
-    if: vars.AWS_ROLE_ARN != '' && github.event_name != 'push' && inputs.fase != 'deploy'
+    if: vars.AWS_ROLE_ARN != '' && vars.DESPLEGAR == 'true' && github.event_name != 'push' && inputs.fase != 'deploy'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

@@ -155,7 +155,12 @@ Del PDF a los datos, también en local (D-2.3 a D-2.5):
 .\.venv\Scripts\python.exe src/pipeline.py markdown                     # PDF -> Markdown del KID en data/markdown/
 .\.venv\Scripts\python.exe src/pipeline.py evaluar                      # extractor por reglas frente a la referencia
 .\.venv\Scripts\python.exe src/pipeline.py evaluar --predicciones data/extraccion/<modelo>.jsonl
+.\.venv\Scripts\python.exe src/pipeline.py extract --local --modelo global.moonshotai.kimi-k3.1  # Bedrock, tras aws login
 ```
+
+Resultado con Bedrock (26/11/2026, [D-2.2](docs/DECISIONES.md)): **Kimi K3.1** acierta 170 de 170 campos de la
+referencia y sus 680 evidencias aparecen en el KID y cuadran con su valor. Nova 2 Lite, sin modo estricto, se queda en
+159 de 170. `extract --local` retoma donde lo dejó: un KID ya extraído no se vuelve a pagar.
 
 `evaluar` compara campo a campo con `data/referencia.json` (17 KID revisados a mano, no versionado):
 - **En la referencia:** exactitud por campo y global, nulls acertados, valores inventados u omitidos y la lista de
@@ -176,7 +181,8 @@ Despliegue, en tres pasos:
 3. **Push a `main`**: `deploy.yml` sube las imágenes y aplica `infra/`. Después, Actions > AWS > Run workflow con la
    fase `init-db` la primera vez y `capture-extract` a partir de ahí (también corre solo cada lunes).
 
-Mientras `AWS_ROLE_ARN` no exista, `deploy.yml` no hace nada y solo corre la CI. El material
+Mientras no existan `AWS_ROLE_ARN` y `DESPLEGAR=true` (el interruptor de coste, D-5.2), `deploy.yml` no hace nada y solo
+corre la CI. El material
 de clase no se versiona: quien lo necesite lo copia en `docs/raw/`.
 
 ## Contrato común
@@ -221,6 +227,8 @@ de clase no se versiona: quien lo necesite lo copia en `docs/raw/`.
 - [x] Documentación de teoría (`docs/teoria/`), hasta la clase del 14/11 y la web del curso
 - [x] Taller 1, captura: las tres gestoras en local, con manifiesto, `verificar` y tests (68 KID)
 - [x] Extracción sin AWS: Markdown del KID, esquema con evidencias, extractor por reglas y evaluación (17 KID de referencia)
-- [ ] Taller 1, AWS: conexión GitHub-AWS, bucket y base de datos con Terraform
+- [x] Taller 1, AWS: cuenta, bootstrap (estado de Terraform, OIDC y rol de GitHub) y variables del repositorio
+- [x] Extracción con Bedrock real (Kimi K3.1): 68 KID, 170/170 en la referencia y 680/680 evidencias
+- [ ] Primer despliegue (`DESPLEGAR=true`): bucket, base de datos, API y aplicación
 - [ ] Taller 2: extracción con Bedrock, carga en PostgreSQL, API y aplicación desplegadas
 - [ ] Taller 3: exposición
