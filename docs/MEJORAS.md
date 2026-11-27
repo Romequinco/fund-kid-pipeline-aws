@@ -32,8 +32,13 @@ decisión en [DECISIONES.md](DECISIONES.md) y se marca aquí.
    - Ejemplos en `/docs`.
 5. [ ] **Permisos mínimos del rol de GitHub** (D-5.3): el curso lo pide «para nota». Hay que probarlo bien para no
    romper el despliegue.
-6. [ ] Extracción por eventos (S3 → Lambda): ampliación del enunciado, pero el lote semanal ya cubre el caso. Prioridad
-   baja.
+6. [ ] **Orquestar el lote dentro de AWS**, como la solución de referencia del profesor (commit del 26/11/2026):
+   - **Cómo:** una Lambda con imagen por etapa (captura, Markdown y extracción), encadenadas con Step Functions (o
+     Lambda Destinations) y programadas con EventBridge Scheduler (`cron(0 6 * * ? *)`, Europe/Madrid). La salida de cada
+     etapa es la entrada de la siguiente (`claves`).
+   - **Qué aporta:** es la «arquitectura por eventos» del enunciado, con reintentos y trazas por ejecución en la consola.
+   - **Ojo:** el límite de 15 minutos de Lambda. La captura de las tres gestoras dura ~3-5 min, con pausas de 2 s.
+   - **Variante más simple:** extracción disparada por S3 (`s3:ObjectCreated` → Lambda).
 7. [x] ~~Playwright~~: descartado. Las tres webs sirven el enlace al KID en el HTML, sin JavaScript (06 §3.5).
 
 ## Compartir con el grupo

@@ -275,6 +275,34 @@ de clase no se versiona: quien lo necesite lo copia en `docs/raw/`.
 - **Terraform es el único dueño de la infraestructura**, incluida la versión de cada imagen (`*_image_tag` = commit).
   Nada se cambia a mano en la consola.
 
+## Ampliaciones y mejoras
+
+**Hechas** (las que propone el enunciado §4 van marcadas con ★):
+
+| Ampliación | Dónde |
+|---|---|
+| ★ Comparar la calidad de extracción de varios modelos: Kimi K3.1 frente a Nova 2 Lite frente a reglas | [D-2.2](docs/DECISIONES.md) |
+| ★ Medir la precisión con KID revisados a mano: 17 KID, 170 campos | [D-2.5](docs/DECISIONES.md) |
+| ★ Tests y validaciones en el pipeline de GitHub: 109 tests, ruff, `terraform validate` y las imágenes | `.github/workflows/ci.yml` |
+| ★ Detectar cambios en los KID: nuevos, cambiados o desaparecidos en cada captura (falta el aviso por correo) | [D-1.6](docs/DECISIONES.md) |
+| Evidencia literal por campo, verificada contra el documento | [D-2.4](docs/DECISIONES.md) |
+| Tres fuentes y una clase por KID (68 documentos frente a los 15 del mínimo) | [D-1.4](docs/DECISIONES.md) |
+| Aplicación a ~0 $ al mes: Streamlit en el navegador; ECS Express como alternativa apagada | [D-4.3](docs/DECISIONES.md) |
+
+**Posibles**, por orden de valor (detalle y estado en [`docs/MEJORAS.md`](docs/MEJORAS.md)):
+
+| Mejora | Qué aporta | Esfuerzo | Coste |
+|---|---|---|---|
+| Interfaz más cuidada: ficha con evidencias, comparador y página de calidad | Lo más visible en la demo | Medio | 0 $ |
+| ★ Buscador en lenguaje natural («renta variable con SRI ≤ 4 y gastos < 1 %»), con Kimi y salida estructurada | Ampliación del enunciado; luce en directo | Medio | Céntimos por pregunta |
+| ★ Aviso por correo (SNS) cuando cambia un KID | Completa la detección de cambios | Bajo | ~0 $ |
+| Mejoras de la API: filtros por gastos y periodo, orden, paginación, `/comparar` y `/buscar` | Base para las dos anteriores | Bajo-medio | 0 $ |
+| ★ Orquestar el lote dentro de AWS, como la solución de referencia: una Lambda por etapa, Step Functions y EventBridge Scheduler, en lugar del job de GitHub Actions | Arquitectura por eventos, con reintentos y trazas por ejecución | Medio-alto | ~0 $ |
+| Permisos mínimos del rol de GitHub, limitados a los recursos `fund-kid-*` | El curso lo pide «para nota» | Medio | 0 $ |
+| Más gestoras o el registro de la CNMV como fuente | Más cobertura | Medio por fuente | Céntimos de Bedrock |
+| Compartir con el grupo: colaboradores en GitHub, usuarios IAM y `data/` en S3 | Trabajo en equipo | Bajo | 0 $ |
+| ~~Playwright~~ | Descartado: las tres webs no necesitan JavaScript | — | — |
+
 ## Documentación
 
 - [`docs/DECISIONES.md`](docs/DECISIONES.md): decisiones del proyecto, cerradas y abiertas.
